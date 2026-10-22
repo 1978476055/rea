@@ -87,8 +87,8 @@ value wins. Cutter reads the environment that starts Cutter and publishes
 `max_request_bytes` on its session descriptor. A Hopper or Cutter process
 started out of band without the setting uses 16777216 bytes. The client
 compares that advertisement with its own ceiling and reports the mismatch
-before sending a command. Cutter response frames use this same ceiling. Hopper
-response reads are unchanged.
+before sending a command. Cutter response frames use this same ceiling and
+also exclude the terminating LF. Hopper response reads are unchanged.
 Each bridge request waits 25000 ms. Discovery admits at most 256 descriptor
 candidates and reads and probes at most eight concurrently. A larger directory
 reports `bridge_directory_capacity_exceeded`. This release has no runtime

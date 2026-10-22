@@ -144,18 +144,15 @@ class CutterBridgeResponseFrames {
       const delimiter = chunk.indexOf(0x0a, offset);
       const end = delimiter < 0 ? chunk.length : delimiter;
       const segment = chunk.subarray(offset, end);
-      if (
-        this.#contentBytes + segment.length + (delimiter < 0 ? 1 : 0) >
-        this.#limit.maximumBytes
-      )
+      // The ceiling counts payload bytes only. A following LF is framing
+      // and may be the one byte beyond that payload.
+      if (this.#contentBytes + segment.length > this.#limit.maximumBytes)
         throw bridgeResponseOversizeError(this.#limit);
       this.#append(segment);
       if (delimiter < 0) return;
-      if (++this.#contentBytes > this.#limit.maximumBytes)
-        throw bridgeResponseOversizeError(this.#limit);
       if (this.#pageLength > 0)
         this.#parts.push(this.#page.subarray(0, this.#pageLength));
-      const line = Buffer.concat(this.#parts, this.#contentBytes - 1);
+      const line = Buffer.concat(this.#parts, this.#contentBytes);
       this.#reset();
       if (++this.#framesRead > 2)
         throw new Error("Cutter bridge sent more than two protocol frames");

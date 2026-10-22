@@ -762,7 +762,9 @@ class _BridgeServer(threading.Thread):
         if not _within_response_limit(value):
             return None
         prefix = b'{"response":"'
-        suffix = b'","proof":"' + (b"0" * 64) + b'"}\n'
+        # MAX_FRAME_BYTES limits the JSON payload. The terminating LF is
+        # framing and is appended after this size check.
+        suffix = b'","proof":"' + (b"0" * 64) + b'"}'
         frame_size = len(prefix) + len(suffix)
         response_parts: list[bytes] = []
         escaped_parts: list[bytes] = []

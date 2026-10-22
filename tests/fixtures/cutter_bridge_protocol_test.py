@@ -684,6 +684,41 @@ class BridgeRequestCeilingTest(unittest.TestCase):
             {},
         )
 
+    def test_authenticated_response_budget_excludes_the_line_terminator(self):
+        module = _load_cutter_bridge("response_lf", "8192")
+        server = module._BridgeServer.__new__(module._BridgeServer)
+        server.token = "token"
+        server.session_id = "00000000-0000-4000-8000-000000000001"
+
+        def encode(length):
+            return server._encode_authenticated_response(
+                {
+                    "ok": True,
+                    "output": "A" * length,
+                    "execution_state": "complete",
+                },
+                "a" * 64,
+                "b" * 64,
+            )
+
+        low = 0
+        high = module.MAX_FRAME_BYTES
+        accepted = None
+        accepted_length = None
+        while low <= high:
+            mid = (low + high) // 2
+            encoded = encode(mid)
+            if encoded is None:
+                high = mid - 1
+            else:
+                accepted = encoded
+                accepted_length = mid
+                low = mid + 1
+        self.assertIsNotNone(accepted)
+        self.assertTrue(accepted.endswith(b"\n"))
+        self.assertEqual(len(accepted) - 1, module.MAX_FRAME_BYTES)
+        self.assertIsNone(encode(accepted_length + 1))
+
     def test_invalid_ceilings_are_refused(self):
         for raw in ("7463", "268435457", "0", "-1", "abc", "016777216"):
             with self.assertRaises(RuntimeError) as caught:

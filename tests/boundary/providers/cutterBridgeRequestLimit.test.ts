@@ -136,6 +136,87 @@ it("lowers the Cutter command ceiling for both the refusal and a live command", 
   });
 });
 
+const responseEnvelopeBytes = (output: string): number => {
+  const response = JSON.stringify({
+    ok: true,
+    output,
+    execution_state: "complete",
+    document_generation: 0,
+    identity_status: "partial",
+  });
+  return Buffer.byteLength(JSON.stringify({ response, proof: "0".repeat(64) }));
+};
+
+const outputForEnvelope = (target: number): string => {
+  const count = target - responseEnvelopeBytes("");
+  if (responseEnvelopeBytes("A".repeat(count)) !== target)
+    throw new Error(`expected an exact ${String(target)}-byte response frame`);
+  return "A".repeat(count);
+};
+
+it("accepts a Cutter response at the ceiling and excludes the terminating LF", async () => {
+  const directory = await privateDirectory();
+  const ceiling = 8192;
+  const output = outputForEnvelope(ceiling);
+  const server = authenticatedServer(TOKEN, SESSION, (request, respond) => {
+    if (request.kind === "ack") {
+      respond({ ok: true, acknowledged: true });
+      return;
+    }
+    const command = request.command;
+    const body = {
+      ok: true,
+      output: command === "over" ? `${output}A` : output,
+      execution_state: "complete",
+      document_generation: 0,
+      identity_status: "partial",
+    };
+    if (command === "split") respond(body, { chunkBytes: ceiling });
+    else respond(body);
+  });
+  const port = await listen(server);
+  await writeDescriptor(directory, SESSION, port, TOKEN, {
+    maxRequestBytes: ceiling,
+  });
+  const client = clientFor(directory, String(ceiling));
+  await expect(
+    client.execute({
+      sessionId: SESSION,
+      expectedGeneration: 0,
+      command: "exact",
+      json: false,
+    }),
+  ).resolves.toMatchObject({
+    output,
+    executionState: "complete",
+  });
+  await expect(
+    client.execute({
+      sessionId: SESSION,
+      expectedGeneration: 0,
+      command: "split",
+      json: false,
+    }),
+  ).resolves.toMatchObject({
+    output,
+    executionState: "complete",
+  });
+  const oversize = await client.execute({
+    sessionId: SESSION,
+    expectedGeneration: 0,
+    command: "over",
+    json: false,
+  });
+  expect(oversize).toMatchObject({
+    executionState: "unknown",
+    error: "transport-response-missing",
+  });
+  expect(oversize.message).toContain("8192");
+  expect(oversize.message).toContain("REA_BRIDGE_MAX_REQUEST_BYTES");
+  expect(oversize.message).toContain("may have completed");
+  expect(oversize.message).not.toContain("no runtime override");
+});
+
 it("sends a Cutter command above 16 MiB when both sides raise the ceiling", async () => {
   const directory = await privateDirectory();
   const ceiling = 17 * 1024 * 1024;
