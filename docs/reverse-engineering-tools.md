@@ -78,7 +78,8 @@ fits the largest bounded symbol-name command inside an authenticated Cutter
 frame. The maximum is one byte under Node's 536870888-character string ceiling
 so the framing LF still fits. The ceiling counts the encoded payload. A JSON
 escape is measured before serialization and is not divided into the maximum
-again. Zero, negative, non-decimal, and out-of-range
+again. Cutter hashes the HMAC prefix and the payload as separate updates, so
+an exact-limit frame does not build one preimage string. Zero, negative, non-decimal, and out-of-range
 values are `configuration_invalid` and do not fall back to the default. The
 bridge accepts that full payload size and rejects a larger payload while
 bounding the read. An incomplete frame is still `Incomplete bridge request
