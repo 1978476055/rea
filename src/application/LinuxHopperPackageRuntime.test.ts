@@ -7,6 +7,7 @@ import * as pythonRuntime from "./LinuxHopperPython.js";
 import {
   linuxHopperInstallDisclosure,
   systemLinuxHopperInstallHost,
+  type LinuxDistribution,
 } from "./LinuxHopper.js";
 
 const missingPython = {
@@ -25,6 +26,14 @@ const readyPython = {
     path: "/usr/lib/x86_64-linux-gnu/libpython3.14.so.1.0",
   },
 } satisfies pythonRuntime.LinuxHopperPythonRuntime;
+const supportedDistribution = (): Promise<LinuxDistribution> =>
+  Promise.resolve({
+    id: "ubuntu",
+    versionId: "24.04",
+    packageFamily: "deb",
+    hopperSetupSupported: true,
+  });
+
 const commandSuccess = {
   exitCode: 0,
   stdout: "",
@@ -80,7 +89,10 @@ describe("Linux Hopper package runtime", () => {
     const directory = await createTestTempDirectory(
       "rea-linux-python-install-",
     );
-    const host = systemLinuxHopperInstallHost({ XDG_CACHE_HOME: directory });
+    const host = systemLinuxHopperInstallHost(
+      { XDG_CACHE_HOME: directory },
+      supportedDistribution,
+    );
     const command = vi
       .spyOn(boundedCommands, "execFileBoundedOutput")
       .mockResolvedValue(commandSuccess);
@@ -115,7 +127,10 @@ describe("Linux Hopper package runtime", () => {
     const directory = await createTestTempDirectory(
       "rea-linux-python-failure-",
     );
-    const host = systemLinuxHopperInstallHost({ XDG_CACHE_HOME: directory });
+    const host = systemLinuxHopperInstallHost(
+      { XDG_CACHE_HOME: directory },
+      supportedDistribution,
+    );
     const failed = {
       exitCode: 67,
       stdout: "original package output",
@@ -153,7 +168,10 @@ describe("Linux Hopper package mapping", () => {
     "/usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0",
   ])("keeps an unproven APT mapping unknown: %s", async (path) => {
     const directory = await createTestTempDirectory("rea-python-package-map-");
-    const host = systemLinuxHopperInstallHost({ XDG_CACHE_HOME: directory });
+    const host = systemLinuxHopperInstallHost(
+      { XDG_CACHE_HOME: directory },
+      supportedDistribution,
+    );
     const command = vi
       .spyOn(boundedCommands, "execFileBoundedOutput")
       .mockResolvedValue(commandSuccess);
@@ -201,7 +219,10 @@ describe("Linux Hopper package cancellation and disclosure", () => {
       const directory = await createTestTempDirectory(
         "rea-python-install-cancel-",
       );
-      const host = systemLinuxHopperInstallHost({ XDG_CACHE_HOME: directory });
+      const host = systemLinuxHopperInstallHost(
+        { XDG_CACHE_HOME: directory },
+        supportedDistribution,
+      );
       const controller = new AbortController();
       const cause = new Error("caller cancelled at " + phase);
       let commandCount = 0;

@@ -379,11 +379,20 @@ describe("Linux Hopper cleanup and failure details", () => {
     const directory = await createTestTempDirectory("rea-hopper-status-");
     const launcher = join(directory, "Hopper");
     await writeFile(launcher, "fixture launcher");
-    const host = systemLinuxHopperInstallHost({
-      ...process.env,
-      HOME: directory,
-      XDG_CACHE_HOME: join(directory, "cache"),
-    });
+    const host = systemLinuxHopperInstallHost(
+      {
+        ...process.env,
+        HOME: directory,
+        XDG_CACHE_HOME: join(directory, "cache"),
+      },
+      () =>
+        Promise.resolve({
+          id: "ubuntu",
+          versionId: "24.04",
+          packageFamily: "deb",
+          hopperSetupSupported: true,
+        }),
+    );
     const command = vi
       .spyOn(nativeCommands, "execFileOutput")
       .mockResolvedValue({
