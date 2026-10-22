@@ -32,7 +32,9 @@ export const MINIMUM_BRIDGE_MAX_REQUEST_BYTES = 7464;
  * escaped JSON against it before `JSON.stringify`, so a U+0001 expansion is
  * counted once. Node's single-string ceiling is 536870888 UTF-16 code units.
  * The payload budget excludes the terminating LF, and that LF is the one code
- * unit appended after the check. The maximum leaves room for it.
+ * unit appended after the check. The maximum leaves room for it. Cutter signs
+ * that payload from bounded JSON pieces and writes it in 64 KiB chunks, so a
+ * fitting response does not retain several frame-sized copies.
  */
 const NODE_MAX_STRING_LENGTH = 536_870_888;
 const FRAMING_LF_CODE_UNITS = 1;

@@ -253,6 +253,43 @@ class ResponseEncodingTest(unittest.TestCase):
             "execution_state": "complete",
         }, "a" * 64, "b" * 64))
 
+    def test_streamed_frame_matches_the_encoded_frame(self):
+        value = {
+            "ok": True,
+            "output": 'say "hi"\\\n雪\u2028',
+            "execution_state": "complete",
+        }
+        encoded = self.server._encode_authenticated_response(value, "a" * 64, "b" * 64)
+        sender, receiver = socket.socketpair()
+        try:
+            receiver.settimeout(2)
+            self.server._send_authenticated(sender, value, "a" * 64, "b" * 64)
+            sender.shutdown(socket.SHUT_WR)
+            streamed = bytearray()
+            while True:
+                part = receiver.recv(65536)
+                if not part:
+                    break
+                streamed.extend(part)
+        finally:
+            sender.close()
+            receiver.close()
+        self.assertEqual(bytes(streamed), encoded)
+        self.assertEqual(json.loads(json.loads(encoded)["response"]), value)
+
+    def test_json_pieces_stay_within_one_chunk(self):
+        output = 'say "hi"\\\n雪\u0001' * 20000
+        self.assertGreater(len(output), bridge._JSON_CHUNK_CHARS)
+        value = {"ok": True, "output": output, "execution_state": "complete"}
+        pieces = list(bridge._response_fragments(value))
+        self.assertGreater(len(pieces), 4)
+        for piece in pieces:
+            self.assertLessEqual(len(piece), bridge._JSON_CHUNK_CHARS * 6)
+        self.assertEqual(
+            "".join(pieces),
+            json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+        )
+
     def test_unencodable_output_preserves_authenticated_completion(self):
         for index, surrogate in ((0, "\ud800"), (5 * 1024 * 1024 - 1, "\udfff")):
             with self.subTest(index=index):

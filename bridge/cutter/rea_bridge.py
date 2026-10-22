@@ -40,10 +40,27 @@ except ImportError:
 # that fits is kept. A path that does not fit is null, not the descriptor path.
 # 536870887 is Node's 536870888-character string ceiling minus the framing LF.
 # The ceiling is the encoded payload; JSON expansion is measured before it.
+# A fitting response is signed from bounded JSON pieces and written in 64 KiB
+# chunks, so this maximum does not retain several copies of the frame.
 _BRIDGE_MAX_REQUEST_BYTES_SETTING = "REA_BRIDGE_MAX_REQUEST_BYTES"
 DEFAULT_BRIDGE_MAX_REQUEST_BYTES = 16 * 1024 * 1024
 MINIMUM_BRIDGE_MAX_REQUEST_BYTES = 7464
 MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = 536870887
+# The outer authenticated frame around the escaped JSON payload, excluding LF.
+_AUTHENTICATED_PREFIX = b'{"response":"'
+_AUTHENTICATED_PROOF_MARK = b'","proof":"'
+_PROOF_HEX_LENGTH = 64
+_AUTHENTICATED_FRAME_OVERHEAD = (
+    len(_AUTHENTICATED_PREFIX)
+    + len(_AUTHENTICATED_PROOF_MARK)
+    + _PROOF_HEX_LENGTH
+    + len(b'"}')
+)
+_AUTHENTICATED_WRITE_BUFFER_BYTES = 64 * 1024
+# Raw JSON is produced in pieces no larger than this many characters.
+# One character expands to at most six JSON bytes (\u00XX) before the outer
+# string escape, so a piece stays far below the frame ceiling.
+_JSON_CHUNK_CHARS = 64 * 1024
 
 
 def _bridge_max_request_bytes_constraint():
@@ -765,69 +782,98 @@ class _BridgeServer(threading.Thread):
         return value if isinstance(value, dict) else {}
 
     def _send_authenticated(self, connection: socket.socket, value: dict[str, Any], client_nonce: str, server_nonce: str) -> None:
-        encoded = self._encode_authenticated_response(value, client_nonce, server_nonce)
-        if encoded is None:
-            # Keep the recovery payload. Include the observed path when it
-            # fits. An explicit null path means unknown, so the client does
-            # not pair this generation with the descriptor's older path.
-            bounded = self._bounded_status_response(value)
-            if bounded is not None:
-                observed_path = value.get("current_file")
-                if isinstance(observed_path, str) and observed_path:
-                    with_path = dict(bounded)
-                    with_path["current_file"] = observed_path
-                    with_path.pop("message", None)
-                    encoded = self._encode_authenticated_response(
-                        with_path, client_nonce, server_nonce
-                    )
-                if encoded is None:
-                    encoded = self._encode_authenticated_response(
-                        bounded, client_nonce, server_nonce
-                    )
-        if encoded is None:
-            value = self._truncated_response(value)
-            encoded = self._encode_authenticated_response(value, client_nonce, server_nonce)
-        if encoded is None:
-            # This fixed-size fallback is checked through the same signed framing path.
-            value = {
-                "ok": False,
-                "error": "response-limit-exceeded",
-                "execution_state": value.get("execution_state", "unknown"),
-                "output": None,
-                "output_truncated": True,
-                "message": "The result exceeded the bridge frame limit; command completion state is preserved.",
-            }
-            encoded = self._encode_authenticated_response(value, client_nonce, server_nonce)
-        if encoded is None:
+        if self._deliver_authenticated(connection, value, client_nonce, server_nonce):
             return
-        try:
-            connection.sendall(encoded)
-        except OSError:
-            pass
+        # Keep the recovery payload. Include the observed path when it
+        # fits. An explicit null path means unknown, so the client does
+        # not pair this generation with the descriptor's older path.
+        bounded = self._bounded_status_response(value)
+        if bounded is not None:
+            observed_path = value.get("current_file")
+            if isinstance(observed_path, str) and observed_path:
+                with_path = dict(bounded)
+                with_path["current_file"] = observed_path
+                with_path.pop("message", None)
+                if self._deliver_authenticated(
+                    connection, with_path, client_nonce, server_nonce
+                ):
+                    return
+            if self._deliver_authenticated(
+                connection, bounded, client_nonce, server_nonce
+            ):
+                return
+        value = self._truncated_response(value)
+        if self._deliver_authenticated(connection, value, client_nonce, server_nonce):
+            return
+        # This fixed-size fallback is checked through the same signed framing path.
+        self._deliver_authenticated(connection, {
+            "ok": False,
+            "error": "response-limit-exceeded",
+            "execution_state": value.get("execution_state", "unknown"),
+            "output": None,
+            "output_truncated": True,
+            "message": "The result exceeded the bridge frame limit; command completion state is preserved.",
+        }, client_nonce, server_nonce)
 
-    def _encode_authenticated_response(self, value: dict[str, Any], client_nonce: str, server_nonce: str) -> bytes | None:
+    def _deliver_authenticated(
+        self, connection: socket.socket, value: dict[str, Any], client_nonce: str, server_nonce: str
+    ) -> bool:
+        proof = self._authenticated_proof(value, client_nonce, server_nonce)
+        if proof is None:
+            return False
+        try:
+            self._write_authenticated_frame(connection, value, proof)
+        except OSError:
+            # A disconnected caller must not fall through to another payload.
+            pass
+        return True
+
+    def _authenticated_proof(
+        self, value: dict[str, Any], client_nonce: str, server_nonce: str
+    ) -> str | None:
         if not _within_response_limit(value):
             return None
-        prefix = b'{"response":"'
-        # MAX_FRAME_BYTES limits the JSON payload. The terminating LF is
-        # framing and is appended after this size check.
-        suffix = b'","proof":"' + (b"0" * 64) + b'"}'
-        frame_size = len(prefix) + len(suffix)
-        response_parts: list[bytes] = []
-        escaped_parts: list[bytes] = []
-        for fragment in json.JSONEncoder(ensure_ascii=False, separators=(",", ":")).iterencode(value):
-            raw = fragment.encode("utf-8")
-            escaped = json.dumps(fragment, ensure_ascii=False)[1:-1].encode("utf-8")
-            frame_size += len(escaped)
+        # The payload budget excludes the terminating LF. Fragments are
+        # measured and signed here, then discarded. The write pass encodes
+        # them again so a maximum-sized reply is not held in several copies.
+        frame_size = _AUTHENTICATED_FRAME_OVERHEAD
+        proof = hmac.new(self.token.encode(), digestmod=hashlib.sha256)
+        proof.update(
+            f"rea-cutter-response-v2:{self.session_id}:{client_nonce}:{server_nonce}:".encode()
+        )
+        for fragment in _response_fragments(value):
+            frame_size += len(_escape_json_fragment(fragment))
             if frame_size > MAX_FRAME_BYTES:
                 return None
-            response_parts.append(raw)
-            escaped_parts.append(escaped)
-        proof = hmac.new(self.token.encode(), digestmod=hashlib.sha256)
-        proof.update(f"rea-cutter-response-v2:{self.session_id}:{client_nonce}:{server_nonce}:".encode())
-        for part in response_parts:
-            proof.update(part)
-        return prefix + b"".join(escaped_parts) + b'","proof":"' + proof.hexdigest().encode() + b'"}\n'
+            proof.update(fragment.encode("utf-8"))
+        return proof.hexdigest()
+
+    def _encode_authenticated_response(
+        self, value: dict[str, Any], client_nonce: str, server_nonce: str
+    ) -> bytes | None:
+        """Return one exact frame. The socket path writes the same pieces."""
+        proof = self._authenticated_proof(value, client_nonce, server_nonce)
+        if proof is None:
+            return None
+        return b"".join(self._iter_authenticated_frame(value, proof))
+
+    def _iter_authenticated_frame(self, value: dict[str, Any], proof: str):
+        yield _AUTHENTICATED_PREFIX
+        for fragment in _response_fragments(value):
+            yield _escape_json_fragment(fragment)
+        yield _AUTHENTICATED_PROOF_MARK + proof.encode("ascii") + b'"}\n'
+
+    def _write_authenticated_frame(
+        self, connection: socket.socket, value: dict[str, Any], proof: str
+    ) -> None:
+        pending = bytearray()
+        for chunk in self._iter_authenticated_frame(value, proof):
+            pending.extend(chunk)
+            if len(pending) >= _AUTHENTICATED_WRITE_BUFFER_BYTES:
+                connection.sendall(pending)
+                pending.clear()
+        if pending:
+            connection.sendall(pending)
 
     @staticmethod
     def _bounded_status_response(value: dict[str, Any]) -> dict[str, Any] | None:
@@ -937,6 +983,68 @@ class ReaCutterPlugin(cutter.CutterPlugin):
 
 def create_cutter_plugin() -> ReaCutterPlugin:
     return ReaCutterPlugin()
+
+
+def _json_object_key(key: Any) -> str:
+    """Match CPython's JSON object-key text before quoting."""
+    if isinstance(key, str):
+        return key
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    if key is None:
+        return "null"
+    if isinstance(key, int):
+        return str(key)
+    if isinstance(key, float):
+        return json.dumps(key, separators=(",", ":"))
+    raise TypeError("keys must be str, int, float, bool or None")
+
+
+def _response_fragments(value: Any):
+    """Yield compact JSON pieces whose concatenation is the encoded value.
+
+    String contents are sliced before encoding so a large output never becomes
+    one frame-sized fragment. Each piece is at most ``_JSON_CHUNK_CHARS``
+    characters, or the six-byte ``\\u00XX`` expansion of one such slice.
+    """
+    if isinstance(value, str):
+        yield '"'
+        for start in range(0, len(value), _JSON_CHUNK_CHARS):
+            yield json.dumps(
+                value[start:start + _JSON_CHUNK_CHARS], ensure_ascii=False
+            )[1:-1]
+        yield '"'
+        return
+    if isinstance(value, dict):
+        yield "{"
+        first = True
+        for key, item in value.items():
+            if not first:
+                yield ","
+            first = False
+            yield from _response_fragments(_json_object_key(key))
+            yield ":"
+            yield from _response_fragments(item)
+        yield "}"
+        return
+    if isinstance(value, (list, tuple)):
+        yield "["
+        first = True
+        for item in value:
+            if not first:
+                yield ","
+            first = False
+            yield from _response_fragments(item)
+        yield "]"
+        return
+    yield json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _escape_json_fragment(fragment: str) -> bytes:
+    """Escape one raw JSON piece for the outer response string."""
+    return json.dumps(fragment, ensure_ascii=False)[1:-1].encode("utf-8")
 
 
 def _within_response_limit(value: Any) -> bool:
