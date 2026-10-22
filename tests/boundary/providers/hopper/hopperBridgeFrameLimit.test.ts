@@ -95,9 +95,7 @@ it("serves requests up to the frame limit and refuses a line that exceeds it", a
   expect(result.eof_partial.thread_released).toBe(true);
 });
 
-const runProbe = async (
-  ...arguments_: readonly string[]
-): Promise<unknown> => {
+const runProbe = async (...arguments_: readonly string[]): Promise<unknown> => {
   const { stdout } = await execute("python3", [
     fileURLToPath(probePath),
     fileURLToPath(bridgePath),
@@ -109,7 +107,9 @@ const runProbe = async (
 it.each([8192, 17 * 1024 * 1024])(
   "serves a caller-selected ceiling of %d bytes",
   async (limit) => {
-    const result = probeResultSchema.parse(await runProbe("bytes", String(limit)));
+    const result = probeResultSchema.parse(
+      await runProbe("bytes", String(limit)),
+    );
     expect(result.limit).toBe(limit);
     expect(result.source).toBe("setting");
     expect(result.at_limit.reply).toMatchObject({

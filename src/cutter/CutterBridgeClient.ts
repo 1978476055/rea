@@ -456,13 +456,17 @@ export class CutterBridgeClient {
           "Cutter",
         );
       const requestId = randomUUID();
-      const commandRequest = serializeRequest(this.#maxRequestBytes, descriptor, {
-        kind: "command",
-        request_id: requestId,
-        expected_generation: input.expectedGeneration,
-        command: input.command,
-        json: input.json,
-      });
+      const commandRequest = serializeRequest(
+        this.#maxRequestBytes,
+        descriptor,
+        {
+          kind: "command",
+          request_id: requestId,
+          expected_generation: input.expectedGeneration,
+          command: input.command,
+          json: input.json,
+        },
+      );
       await this.#recoverCompletedCommands(descriptor, input.signal);
       await this.#retryPendingAcknowledgements(descriptor);
       assertBridgeActive(input.signal, "cutter_command");

@@ -33,9 +33,7 @@ export const parseHopperServerInfo = (
   ) {
     const advertised = value.max_request_bytes;
     const maxRequestBytes =
-      advertised === undefined
-        ? DEFAULT_BRIDGE_MAX_REQUEST_BYTES
-        : advertised;
+      advertised === undefined ? DEFAULT_BRIDGE_MAX_REQUEST_BYTES : advertised;
     if (
       typeof maxRequestBytes !== "number" ||
       !Number.isSafeInteger(maxRequestBytes) ||

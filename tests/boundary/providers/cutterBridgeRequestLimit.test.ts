@@ -41,10 +41,7 @@ const listen = async (
   return address.port;
 };
 
-const clientFor = (
-  directory: string,
-  ceiling: string,
-): CutterBridgeClient => {
+const clientFor = (directory: string, ceiling: string): CutterBridgeClient => {
   const client = new CutterBridgeClient({
     REA_CUTTER_BRIDGE_DIR: directory,
     REA_BRIDGE_MAX_REQUEST_BYTES: ceiling,

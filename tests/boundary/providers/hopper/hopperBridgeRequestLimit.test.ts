@@ -33,9 +33,7 @@ it("reports a Hopper ceiling mismatch and releases the fixture", async () => {
   );
   expect(started.error.reason).not.toContain("no runtime override");
   const process = launcher.processes[0];
-  expect(
-    process?.exitCode !== null || process?.signalCode !== null,
-  ).toBe(true);
+  expect(process?.exitCode !== null || process?.signalCode !== null).toBe(true);
 });
 
 it("refuses an oversized Hopper request before the fixture receives it", async () => {
