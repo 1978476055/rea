@@ -412,6 +412,8 @@ export class CutterBridgeClient {
             document_generation:
               status.data.document_generation ?? descriptor.document_generation,
             current_file:
+              // Null is an observed unknown path. Only a missing field may
+              // fall back to the descriptor, and never beside a newer generation.
               status.data.current_file === undefined
                 ? descriptor.current_file
                 : status.data.current_file,

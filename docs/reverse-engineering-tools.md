@@ -76,9 +76,10 @@ payload bytes and excludes the terminating LF. Unset, the ceiling is 16777216
 bytes (16 MiB). A decimal integer from 7464 to 536870887 is accepted. The floor
 fits the largest bounded symbol-name command inside an authenticated Cutter
 frame. A Cutter status keeps its session id, connection proof, and up to 64
-completion receipts when the frame is tight. `current_file` and
-`cutter_version` are omitted when they do not fit, and the client keeps the
-descriptor values. The maximum is one byte under Node's 536870888-character string ceiling
+completion receipts when the frame is tight. The observed `current_file` is
+included when it fits. When it does not, the status reports that path as
+unknown, and the client does not reuse the descriptor path with the new
+generation. The maximum is one byte under Node's 536870888-character string ceiling
 so the framing LF still fits. The ceiling counts the encoded payload. A JSON
 escape is measured before serialization and is not divided into the maximum
 again. Cutter hashes the HMAC prefix and the payload as separate updates, so

@@ -36,9 +36,8 @@ except ImportError:
 # Request and response frame budget in bytes, excluding the trailing LF.
 # REA_BRIDGE_MAX_REQUEST_BYTES selects it. Unset stays 16777216.
 # 7464 is the authenticated frame of the largest bounded symbol name.
-# The 64-receipt recovery status is smaller once current_file and
-# cutter_version are omitted. Those fields are omitted when the full status
-# does not fit, so recovery still carries session_id and the receipts.
+# The 64-receipt recovery status is smaller with current_file null. A path
+# that fits is kept. A path that does not fit is null, not the descriptor path.
 # 536870887 is Node's 536870888-character string ceiling minus the framing LF.
 # The ceiling is the encoded payload; JSON expansion is measured before it.
 _BRIDGE_MAX_REQUEST_BYTES_SETTING = "REA_BRIDGE_MAX_REQUEST_BYTES"
@@ -768,13 +767,23 @@ class _BridgeServer(threading.Thread):
     def _send_authenticated(self, connection: socket.socket, value: dict[str, Any], client_nonce: str, server_nonce: str) -> None:
         encoded = self._encode_authenticated_response(value, client_nonce, server_nonce)
         if encoded is None:
-            # A long current_file or cutter_version must not replace the
-            # recovery payload. The client keeps the descriptor values.
+            # Keep the recovery payload. Include the observed path when it
+            # fits. An explicit null path means unknown, so the client does
+            # not pair this generation with the descriptor's older path.
             bounded = self._bounded_status_response(value)
             if bounded is not None:
-                encoded = self._encode_authenticated_response(
-                    bounded, client_nonce, server_nonce
-                )
+                observed_path = value.get("current_file")
+                if isinstance(observed_path, str) and observed_path:
+                    with_path = dict(bounded)
+                    with_path["current_file"] = observed_path
+                    with_path.pop("message", None)
+                    encoded = self._encode_authenticated_response(
+                        with_path, client_nonce, server_nonce
+                    )
+                if encoded is None:
+                    encoded = self._encode_authenticated_response(
+                        bounded, client_nonce, server_nonce
+                    )
         if encoded is None:
             value = self._truncated_response(value)
             encoded = self._encode_authenticated_response(value, client_nonce, server_nonce)
@@ -830,9 +839,11 @@ class _BridgeServer(threading.Thread):
             "document_generation": value.get("document_generation"),
             "identity_status": value.get("identity_status", "partial"),
             "completed_commands": value.get("completed_commands"),
+            "current_file": None,
             "message": (
-                "current_file and cutter_version were omitted because the status "
-                "frame exceeded REA_BRIDGE_MAX_REQUEST_BYTES."
+                "current_file is unknown because the status frame exceeded "
+                "REA_BRIDGE_MAX_REQUEST_BYTES. Do not reuse an older descriptor "
+                "path with this document_generation."
             ),
         }
         if "completed_connection" in value:

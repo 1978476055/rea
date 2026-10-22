@@ -765,11 +765,24 @@ class BridgeRequestCeilingTest(unittest.TestCase):
         outer = json.loads(bytes(captured).decode("utf-8"))
         response = json.loads(outer["response"])
         self.assertEqual(response["session_id"], server.session_id)
+        self.assertEqual(response["document_generation"], 0)
         self.assertEqual(response["completed_connection"], "f" * 16)
         self.assertEqual(response["completed_commands"], receipts)
-        self.assertNotIn("current_file", response)
+        self.assertIsNone(response["current_file"])
         self.assertNotIn("cutter_version", response)
+        self.assertIn("unknown", response["message"])
         self.assertIn("REA_BRIDGE_MAX_REQUEST_BYTES", response["message"])
+        short = dict(status)
+        short["current_file"] = "/tmp/fresh.bin"
+        short["cutter_version"] = "v" * 4000
+        captured.clear()
+        server._send_authenticated(_Capture(), short, "a" * 64, "b" * 64)
+        preserved = json.loads(
+            json.loads(bytes(captured).decode("utf-8"))["response"]
+        )
+        self.assertEqual(preserved["current_file"], "/tmp/fresh.bin")
+        self.assertEqual(preserved["document_generation"], 0)
+        self.assertNotIn("cutter_version", preserved)
 
     def test_invalid_ceilings_are_refused(self):
         for raw in ("7463", "536870888", "0", "-1", "abc", "016777216"):
