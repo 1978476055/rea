@@ -13,6 +13,7 @@ import { AnalysisProtocolError } from "../domain/analysisErrorCore.js";
 import { ProviderAdapterError } from "../domain/providerAdapterError.js";
 import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import { WindowsPrivateRuntime } from "../windows/WindowsPrivateRuntime.js";
+import { REGEX_MATCHING_LIMITATION } from "../process/RegexMatcher.js";
 
 const roots: string[] = [];
 const windowsRuntimes = new Set<WindowsPrivateRuntime>();
@@ -581,7 +582,7 @@ describe("attached IDA regex supervision", () => {
       });
       expect(recovered.ok && recovered.value.result).toHaveLength(1);
       expect(recovered.ok && recovered.value.limitations).toContain(
-        "Regex mode uses ECMAScript Unicode semantics in a cancellable worker with a 5-second matching deadline; matching failure leaves the service available.",
+        REGEX_MATCHING_LIMITATION,
       );
     } finally {
       await client.close();
