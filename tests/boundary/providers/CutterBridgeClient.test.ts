@@ -19,10 +19,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CutterBridgeClient } from "../../../src/cutter/CutterBridgeClient.js";
-import {
-  AnalysisInputError,
-  AnalysisResourceConstraintError,
-} from "../../../src/domain/analysisErrorCore.js";
+import { AnalysisInputError } from "../../../src/domain/analysisErrorCore.js";
 import { CutterBridgeService } from "../../../src/cutter/CutterBridgeService.js";
 
 const listen = async (
@@ -922,25 +919,22 @@ describe("CutterBridgeClient: scenario group 6", () => {
       port,
       "synthetic-cutter-bridge-token-for-test",
     );
-    await expect(
-      createClient({ REA_CUTTER_BRIDGE_DIR: directory }).execute({
-        sessionId,
-        expectedGeneration: 0,
-        command: "pd 1",
-        json: false,
-      }),
-    ).rejects.toSatisfy((error: unknown) => {
-      expect(error).toBeInstanceOf(AnalysisResourceConstraintError);
-      if (!(error instanceof AnalysisResourceConstraintError)) return false;
-      expect(error.reason).toContain(
-        "Cutter bridge response exceeded its framed transport limit of 16777216 bytes",
-      );
-      expect(error.reason).toContain("may have completed");
-      expect(error.reason).toContain("REA_BRIDGE_MAX_REQUEST_BYTES");
-      expect(error.reason).not.toContain("no runtime override");
-      expect(error.retryable).toBe(false);
-      return true;
+    const execution = await createClient({
+      REA_CUTTER_BRIDGE_DIR: directory,
+    }).execute({
+      sessionId,
+      expectedGeneration: 0,
+      command: "pd 1",
+      json: false,
     });
+    expect(execution).toMatchObject({
+      executionState: "unknown",
+      error: "transport-response-missing",
+      message: expect.stringMatching(
+        /framed transport limit of 16777216 bytes.*REA_BRIDGE_MAX_REQUEST_BYTES.*may have completed/s,
+      ),
+    });
+    expect(execution.message).not.toContain("no runtime override");
   });
 
   it("rejects stale sessions and preserves failures before command dispatch", async () => {

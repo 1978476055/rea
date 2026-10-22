@@ -164,7 +164,7 @@ export const bridgeResponseOversizeError = (
   return new AnalysisResourceConstraintError(
     "cutter_command",
     "transport",
-    `Cutter bridge response exceeded its framed transport limit of ${String(limit.maximumBytes)} bytes. The command may have completed; do not retry automatically. ${recovery}`,
+    `Cutter bridge response exceeded its framed transport limit of ${String(limit.maximumBytes)} bytes. ${recovery}`,
     limitFacts(limit),
     { remediationAction: recovery, retryable: false },
   );

@@ -1069,7 +1069,11 @@ export class CutterBridgeClient {
           });
         } catch (cause) {
           if (cause instanceof AnalysisResourceConstraintError) {
-            finish(() => reject(cause));
+            // The command is already on the UI thread. Keep the unknown
+            // execution so cleanup waits for its receipt, and carry the
+            // ceiling diagnostic in that result.
+            if (requestSent) rejectRequest(cause.reason);
+            else finish(() => reject(cause));
             return;
           }
           rejectRequest("Cutter bridge peer authentication or response failed");
