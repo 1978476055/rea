@@ -212,19 +212,46 @@ export class HopperClient {
         options.bridgeMaxRequestBytes ?? DEFAULT_BRIDGE_MAX_REQUEST,
     };
     this.#requests = new HopperRequestQueue(
-      ({ id, method, params, frame }, failed) => {
+      ({ id, method, params }, failed) => {
         const socket = this.#socket;
         const token = this.#token;
         if (socket === undefined || socket.destroyed || token === undefined) {
           failed();
           return;
         }
-        socket.write(
-          frame ?? `${JSON.stringify({ id, token, method, params })}\n`,
-          (cause) => {
-            if (cause !== undefined && cause !== null) failed();
-          },
-        );
+        // The FIFO keeps the caller's params. The encoded frame exists only
+        // for the request that has reached the wire.
+        const payloadValue = { id, token, method, params };
+        let payload: string;
+        try {
+          payload = JSON.stringify(payloadValue);
+        } catch (cause: unknown) {
+          this.#requests.accept(
+            id,
+            err(
+              new HopperProtocolError("Hopper socket write failed", { cause }),
+            ),
+          );
+          return;
+        }
+        const payloadBytes = Buffer.byteLength(payload);
+        if (payloadBytes > this.#options.bridgeMaxRequestBytes.maximumBytes) {
+          this.#requests.accept(
+            id,
+            err(
+              bridgeRequestOversizeError(
+                method,
+                this.#options.bridgeMaxRequestBytes,
+                payloadBytes,
+                "Hopper",
+              ),
+            ),
+          );
+          return;
+        }
+        socket.write(`${payload}\n`, (cause) => {
+          if (cause !== undefined && cause !== null) failed();
+        });
       },
     );
     this.#responses = new HopperResponseStream({
@@ -1058,8 +1085,9 @@ export class HopperClient {
     if (options.signal?.aborted === true)
       return err(hopperCancelledBySignal(options.signal));
     const payloadValue = { id, token, method, params };
-    // Count escaped JSON before allocation. A rejected payload must not
-    // throw from JSON.stringify once its expansion passes the ceiling.
+    // Count escaped JSON before the request can wait in the FIFO. A rejected
+    // payload is not serialized, and an admitted one is serialized only when
+    // it reaches the wire.
     const measured = jsonValueByteLength(
       payloadValue,
       this.#options.bridgeMaxRequestBytes.maximumBytes,
@@ -1073,21 +1101,8 @@ export class HopperClient {
           "Hopper",
         ),
       );
-    const payload = JSON.stringify(payloadValue);
-    const payloadBytes = Buffer.byteLength(payload);
-    if (payloadBytes > this.#options.bridgeMaxRequestBytes.maximumBytes)
-      return err(
-        bridgeRequestOversizeError(
-          method,
-          this.#options.bridgeMaxRequestBytes,
-          payloadBytes,
-          "Hopper",
-        ),
-      );
-    const frame = `${payload}\n`;
     const startedAt = performance.now();
     const result = await this.#requests.run(id, method, params, {
-      frame,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       ...(options.timeoutMs === undefined
         ? {}

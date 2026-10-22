@@ -122,6 +122,70 @@ it("refuses a Hopper payload whose JSON expansion exceeds the ceiling before ser
   }
 });
 
+const serializedPayload = (
+  calls: readonly unknown[][],
+  value: string,
+): boolean =>
+  calls.some((call) => {
+    const candidate: unknown = call[0];
+    if (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      !("params" in candidate)
+    )
+      return false;
+    const params = candidate.params;
+    return (
+      typeof params === "object" &&
+      params !== null &&
+      "value" in params &&
+      params.value === value
+    );
+  });
+
+it("serializes a queued Hopper request only when it reaches the wire", async () => {
+  const launcher = new HopperFixtureLauncher();
+  const client = trackHopperClient(
+    new HopperClient({
+      launcher,
+      startupTimeoutMs: 10_000,
+    }),
+  );
+  expect((await client.start()).ok).toBe(true);
+  const active = client.callTool("echo", { gate: "hold", value: "active" });
+  const held = await launcher.waitForRequest("echo", "hold");
+  const value = "queued-payload";
+  const stringify = vi.spyOn(JSON, "stringify");
+  let queuedNotice = false;
+  const queued = client.callTool(
+    "echo",
+    { value },
+    {
+      progress: {
+        report: (update) => {
+          if (update.message.includes("queued behind")) queuedNotice = true;
+          return Promise.resolve();
+        },
+      },
+    },
+  );
+  await vi.waitFor(
+    () => {
+      if (!queuedNotice) throw new Error("echo is not queued yet");
+    },
+    { timeout: 5_000 },
+  );
+  expect(serializedPayload(stringify.mock.calls, value)).toBe(false);
+  await launcher.release(held);
+  await expect(active).resolves.toMatchObject({
+    ok: true,
+    value: { gate: "hold", value: "active" },
+  });
+  await expect(queued).resolves.toEqual({ ok: true, value: { value } });
+  expect(serializedPayload(stringify.mock.calls, value)).toBe(true);
+  stringify.mockRestore();
+});
+
 it("sends a Hopper request above 16 MiB when both sides raise the ceiling", async () => {
   const ceiling = 17 * 1024 * 1024;
   const launcher = new HopperFixtureLauncher(

@@ -83,7 +83,9 @@ values are `configuration_invalid` and do not fall back to the default. The
 bridge accepts that full payload size and rejects a larger payload while
 bounding the read. An incomplete frame is still `Incomplete bridge request
 frame`. An oversized command does not retain a cleanup owner. Hopper uses the
-same request payload budget. REA injects a caller-selected value into the
+same request payload budget. A Hopper request is serialized when it reaches
+the bridge, so one waiting behind Hopper's serial bridge does not retain
+another copy of the encoded frame. REA injects a caller-selected value into the
 Hopper bootstrap and the bridge also reads the process environment; an injected
 value wins. Cutter reads the environment that starts Cutter and publishes
 `max_request_bytes` on its session descriptor. A Hopper or Cutter process
