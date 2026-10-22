@@ -300,9 +300,9 @@ timeout does not establish complete analysis or absence of code. See the
 
 Hopper and Cutter share `REA_BRIDGE_MAX_REQUEST_BYTES`. Unset, both sides use
 16777216 bytes. The payload budget excludes the terminating LF. A decimal
-integer from 7464 to 76695798 raises or lowers that ceiling. The maximum is the
-longest U+0001 command whose seven-byte authenticated expansion still fits in
-one Node string. Invalid values
+integer from 7464 to 536870887 raises or lowers that ceiling. The maximum is
+the encoded payload, one byte under Node's string ceiling so the framing LF
+still fits. Invalid values
 are configuration errors and do not fall back to 16777216. Set the variable in
 the environment that starts REA, restart REA, and start Hopper or Cutter from
 that same environment. An out-of-band bridge without the setting stays at

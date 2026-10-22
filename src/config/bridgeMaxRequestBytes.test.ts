@@ -60,31 +60,17 @@ it("accepts a caller-selected ceiling inside the floor and maximum", () => {
   ).toContain("source setting");
 });
 
-it("derives the maximum from the worst-case authenticated Cutter frame", () => {
+it("sets the maximum to the serialized string bound minus the framing LF", () => {
   const stringCeiling = 536_870_888;
-  const frame = (command: string): number =>
-    Buffer.byteLength(
-      JSON.stringify({
-        request: JSON.stringify({
-          kind: "command",
-          request_id: session,
-          expected_generation: Number.MAX_SAFE_INTEGER,
-          command,
-          json: false,
-          session_id: session,
-        }),
-        proof: token,
-      }),
-    );
-  const empty = frame("");
-  const perUnit = frame("\u0001") - empty;
-  expect(empty).toBe(296);
-  expect(perUnit).toBe(7);
-  const derived = Math.floor((stringCeiling - empty) / perUnit);
-  expect(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES).toBe(derived);
-  expect(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES).toBe(76_695_798);
-  expect(empty + perUnit * derived).toBeLessThanOrEqual(stringCeiling);
-  expect(empty + perUnit * (derived + 1)).toBeGreaterThan(stringCeiling);
+  const hundredMib = 100 * 1024 * 1024;
+  expect(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES).toBe(stringCeiling - 1);
+  expect(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES).toBe(536_870_887);
+  expect(hundredMib).toBeLessThan(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES);
+  const parsed = parseConfig({
+    [BRIDGE_MAX_REQUEST_BYTES_SETTING]: String(hundredMib),
+  });
+  if (!parsed.ok) throw new Error("a 100 MiB encoded ceiling was rejected");
+  expect(parsed.value.bridgeMaxRequestBytes).toEqual(configured(hundredMib));
   expect(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES).toBeGreaterThan(
     DEFAULT_BRIDGE_MAX_REQUEST_BYTES,
   );

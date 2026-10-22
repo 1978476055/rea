@@ -36,12 +36,12 @@ except ImportError:
 # Request and response frame budget in bytes, excluding the trailing LF.
 # REA_BRIDGE_MAX_REQUEST_BYTES selects it. Unset stays 16777216.
 # 7464 is the authenticated frame of the largest bounded symbol name.
-# 76695798 is floor((536870888 - 296) / 7): one U+0001 becomes 7 authenticated
-# payload bytes, and that many still fit in one Node string.
+# 536870887 is Node's 536870888-character string ceiling minus the framing LF.
+# The ceiling is the encoded payload; JSON expansion is measured before it.
 _BRIDGE_MAX_REQUEST_BYTES_SETTING = "REA_BRIDGE_MAX_REQUEST_BYTES"
 DEFAULT_BRIDGE_MAX_REQUEST_BYTES = 16 * 1024 * 1024
 MINIMUM_BRIDGE_MAX_REQUEST_BYTES = 7464
-MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = 76695798
+MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = 536870887
 
 
 def _bridge_max_request_bytes_constraint():
@@ -49,9 +49,9 @@ def _bridge_max_request_bytes_constraint():
         "REA_BRIDGE_MAX_REQUEST_BYTES must be a positive decimal integer "
         "from %d to %d bytes; the default is %d bytes (16 MiB). "
         "A value below %d bytes cannot carry the largest admitted "
-        "symbol-name command, and a larger value is refused so a worst-case "
-        "U+0001 command plus its authenticated envelope stays one string "
-        "under Node's single-string ceiling."
+        "symbol-name command, and a larger value is refused so the encoded "
+        "payload plus its framing LF stays one string under Node's "
+        "single-string ceiling."
         % (
             MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
             MAXIMUM_BRIDGE_MAX_REQUEST_BYTES,

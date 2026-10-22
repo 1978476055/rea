@@ -513,7 +513,7 @@ it.each([
   ],
   [
     "bridge request ceiling above its maximum",
-    { REA_BRIDGE_MAX_REQUEST_BYTES: "76695799" },
+    { REA_BRIDGE_MAX_REQUEST_BYTES: "536870888" },
     "REA_BRIDGE_MAX_REQUEST_BYTES",
   ],
   [
