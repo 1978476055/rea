@@ -17,6 +17,8 @@ HOPPER_SYMBOL_NAME_UTF16_UNITS = 1024
 # Request JSON payload budget in bytes, excluding the trailing LF.
 # REA_BRIDGE_MAX_REQUEST_BYTES selects it. Unset stays 16777216.
 # 7464 is the authenticated Cutter frame of the largest bounded symbol name.
+# Cutter's 64-receipt recovery status is smaller once its path and version
+# are omitted. Those fields are omitted when the full status does not fit.
 # 536870887 is Node's 536870888-character string ceiling minus the framing LF.
 # The ceiling is the encoded payload; JSON expansion is measured before it.
 _BRIDGE_MAX_REQUEST_BYTES_SETTING = "REA_BRIDGE_MAX_REQUEST_BYTES"

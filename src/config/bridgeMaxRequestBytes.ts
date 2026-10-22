@@ -15,7 +15,10 @@ export const DEFAULT_BRIDGE_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
  * that many times JSON-escapes to six bytes per character. The Hopper
  * `set_address_name` request for that name, a max-safe id, and a 64-hex token
  * is 6322 bytes. The authenticated Cutter frame of a command carrying the same
- * name is 7464 bytes. Hello, status, and a minimal command frame are smaller.
+ * name is 7464 bytes. The required Cutter recovery status, 64 receipts with
+ * no path or version, is smaller. A status path or version that does not fit
+ * is omitted, and the client keeps the descriptor values. Hello and a minimal
+ * command frame are smaller.
  * Comments, search text, and Cutter command text are unbounded; this ceiling
  * is what limits them. The floor stays below the 16 MiB default so a caller
  * can lower the ceiling.

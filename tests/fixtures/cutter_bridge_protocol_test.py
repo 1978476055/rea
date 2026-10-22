@@ -724,6 +724,53 @@ class BridgeRequestCeilingTest(unittest.TestCase):
         self.assertEqual(len(accepted) - 1, module.MAX_FRAME_BYTES)
         self.assertIsNone(encode(accepted_length + 1))
 
+    def test_tight_status_keeps_recovery_fields_and_omits_the_path(self):
+        module = _load_cutter_bridge("status_floor", "7464")
+        server = module._BridgeServer.__new__(module._BridgeServer)
+        server.token = "token"
+        server.session_id = "00000000-0000-4000-8000-000000000001"
+        receipts = [
+            {
+                "request_id": str(uuid.UUID(int=index + 1)),
+                "execution_state": "not_started",
+            }
+            for index in range(module.MAX_COMPLETION_RECEIPTS)
+        ]
+        status = {
+            "ok": True,
+            "session_id": server.session_id,
+            "current_file": "a" * 4095,
+            "document_generation": 0,
+            "cutter_version": "2.4.0",
+            "identity_status": "partial",
+            "completed_commands": receipts,
+            "completed_connection": "f" * 16,
+        }
+        self.assertIsNone(
+            server._encode_authenticated_response(status, "a" * 64, "b" * 64)
+        )
+        required = server._bounded_status_response(status)
+        encoded = server._encode_authenticated_response(
+            required, "a" * 64, "b" * 64
+        )
+        self.assertIsNotNone(encoded)
+        self.assertLessEqual(len(encoded) - 1, module.MINIMUM_BRIDGE_MAX_REQUEST_BYTES)
+        captured = bytearray()
+
+        class _Capture:
+            def sendall(self, data):
+                captured.extend(data)
+
+        server._send_authenticated(_Capture(), status, "a" * 64, "b" * 64)
+        outer = json.loads(bytes(captured).decode("utf-8"))
+        response = json.loads(outer["response"])
+        self.assertEqual(response["session_id"], server.session_id)
+        self.assertEqual(response["completed_connection"], "f" * 16)
+        self.assertEqual(response["completed_commands"], receipts)
+        self.assertNotIn("current_file", response)
+        self.assertNotIn("cutter_version", response)
+        self.assertIn("REA_BRIDGE_MAX_REQUEST_BYTES", response["message"])
+
     def test_invalid_ceilings_are_refused(self):
         for raw in ("7463", "536870888", "0", "-1", "abc", "016777216"):
             with self.assertRaises(RuntimeError) as caught:
