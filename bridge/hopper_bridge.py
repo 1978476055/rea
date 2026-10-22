@@ -17,11 +17,12 @@ HOPPER_SYMBOL_NAME_UTF16_UNITS = 1024
 # Request JSON payload budget in bytes, excluding the trailing LF.
 # REA_BRIDGE_MAX_REQUEST_BYTES selects it. Unset stays 16777216.
 # 7464 is the authenticated Cutter frame of the largest bounded symbol name.
-# 268435456 (256 MiB) keeps the decoded request under Node's string ceiling.
+# 76695798 is floor((536870888 - 296) / 7): one U+0001 becomes 7 authenticated
+# payload bytes, and that many still fit in one Node string.
 _BRIDGE_MAX_REQUEST_BYTES_SETTING = "REA_BRIDGE_MAX_REQUEST_BYTES"
 DEFAULT_BRIDGE_MAX_REQUEST_BYTES = 16 * 1024 * 1024
 MINIMUM_BRIDGE_MAX_REQUEST_BYTES = 7464
-MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = 256 * 1024 * 1024
+MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = 76695798
 
 
 def _bridge_max_request_bytes_constraint():
@@ -29,8 +30,9 @@ def _bridge_max_request_bytes_constraint():
         "REA_BRIDGE_MAX_REQUEST_BYTES must be a positive decimal integer "
         "from %d to %d bytes; the default is %d bytes (16 MiB). "
         "A value below %d bytes cannot carry the largest admitted "
-        "symbol-name command, and a larger value is refused so the request "
-        "stays one string under Node's single-string ceiling."
+        "symbol-name command, and a larger value is refused so a worst-case "
+        "U+0001 command plus its authenticated envelope stays one string "
+        "under Node's single-string ceiling."
         % (
             MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
             MAXIMUM_BRIDGE_MAX_REQUEST_BYTES,

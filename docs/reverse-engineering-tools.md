@@ -73,10 +73,10 @@ rejected before dispatch because they cannot preserve cross-caller recovery proo
 The client checks the final encoded request against
 `REA_BRIDGE_MAX_REQUEST_BYTES` before dispatch. The budget applies to request
 payload bytes and excludes the terminating LF. Unset, the ceiling is 16777216
-bytes (16 MiB). A decimal integer from 7464 to 268435456 is accepted. The floor
+bytes (16 MiB). A decimal integer from 7464 to 76695798 is accepted. The floor
 fits the largest bounded symbol-name command inside an authenticated Cutter
-frame. The maximum is 256 MiB so the decoded request stays one string below
-Node's single-string ceiling. Zero, negative, non-decimal, and out-of-range
+frame. The maximum is floor((536870888 - 296) / 7): one U+0001 becomes seven
+authenticated payload bytes, and that many still fit in one Node string. Zero, negative, non-decimal, and out-of-range
 values are `configuration_invalid` and do not fall back to the default. The
 bridge accepts that full payload size and rejects a larger payload while
 bounding the read. An incomplete frame is still `Incomplete bridge request

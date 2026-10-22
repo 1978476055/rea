@@ -654,7 +654,7 @@ class BridgeRequestCeilingTest(unittest.TestCase):
         self.assertEqual(module.MAX_FRAME_BYTES, 16 * 1024 * 1024)
         self.assertEqual(module.BRIDGE_MAX_REQUEST_BYTES_SOURCE, "default")
         self.assertEqual(module.MINIMUM_BRIDGE_MAX_REQUEST_BYTES, 7464)
-        self.assertEqual(module.MAXIMUM_BRIDGE_MAX_REQUEST_BYTES, 256 * 1024 * 1024)
+        self.assertEqual(module.MAXIMUM_BRIDGE_MAX_REQUEST_BYTES, 76695798)
         payload = b"{}" + b" " * (module.MAX_FRAME_BYTES - 2)
         self.assertEqual(
             module._BridgeServer._receive_frame(_BufferedSocket(payload + b"\n")),
@@ -720,7 +720,7 @@ class BridgeRequestCeilingTest(unittest.TestCase):
         self.assertIsNone(encode(accepted_length + 1))
 
     def test_invalid_ceilings_are_refused(self):
-        for raw in ("7463", "268435457", "0", "-1", "abc", "016777216"):
+        for raw in ("7463", "76695799", "0", "-1", "abc", "016777216"):
             with self.assertRaises(RuntimeError) as caught:
                 _load_cutter_bridge("invalid_%s" % raw, raw)
             self.assertIn("REA_BRIDGE_MAX_REQUEST_BYTES", str(caught.exception))

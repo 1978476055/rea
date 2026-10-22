@@ -23,14 +23,24 @@ export const DEFAULT_BRIDGE_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 export const MINIMUM_BRIDGE_MAX_REQUEST_BYTES = 7464;
 
 /**
- * Largest configurable request. The payload is decoded into one string. 256 MiB
- * keeps that text below Node's single-string ceiling of about 512 Mi UTF-16
- * code units, the same memory bound REA already uses for an ASAR header. A
- * 1 GiB payload cannot be one JavaScript string. Callers measure the escaped
- * JSON within this ceiling before serialization, so a six-byte `\u00XX`
- * expansion is refused instead of allocating past the string ceiling.
+ * Largest configurable request, in payload bytes.
+ *
+ * Node's single-string ceiling is 536870888 UTF-16 code units. One U+0001 in
+ * a Cutter command becomes `\u0001` in the inner JSON and `\\u0001` in the
+ * authenticated outer string: 7 payload bytes, excluding the terminating LF.
+ * The empty authenticated command frame is 296 bytes. The maximum is
+ * floor((536870888 - 296) / 7), the longest such command whose expanded frame
+ * is still one string. A 256 MiB ceiling is too high: about 90 million of
+ * those characters stringify past that string ceiling. Callers also measure
+ * the escaped JSON within the effective ceiling before `JSON.stringify`.
  */
-export const MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = 256 * 1024 * 1024;
+const NODE_MAX_STRING_LENGTH = 536_870_888;
+const EMPTY_AUTHENTICATED_COMMAND_FRAME_BYTES = 296;
+const WORST_CASE_AUTHENTICATED_BYTES_PER_CODE_UNIT = 7;
+export const MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = Math.floor(
+  (NODE_MAX_STRING_LENGTH - EMPTY_AUTHENTICATED_COMMAND_FRAME_BYTES) /
+    WORST_CASE_AUTHENTICATED_BYTES_PER_CODE_UNIT,
+);
 
 /** Effective bridge request ceiling and where its value came from. */
 export interface BridgeMaxRequestBytes {
@@ -43,7 +53,7 @@ export const DEFAULT_BRIDGE_MAX_REQUEST: BridgeMaxRequestBytes = {
   source: "default",
 };
 
-export const bridgeMaxRequestBytesConstraint = `${BRIDGE_MAX_REQUEST_BYTES_SETTING} must be a positive decimal integer from ${String(MINIMUM_BRIDGE_MAX_REQUEST_BYTES)} to ${String(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES)} bytes; the default is ${String(DEFAULT_BRIDGE_MAX_REQUEST_BYTES)} bytes (16 MiB). A value below ${String(MINIMUM_BRIDGE_MAX_REQUEST_BYTES)} bytes cannot carry the largest admitted symbol-name command, and a larger value is refused so the request stays one string under Node's single-string ceiling.`;
+export const bridgeMaxRequestBytesConstraint = `${BRIDGE_MAX_REQUEST_BYTES_SETTING} must be a positive decimal integer from ${String(MINIMUM_BRIDGE_MAX_REQUEST_BYTES)} to ${String(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES)} bytes; the default is ${String(DEFAULT_BRIDGE_MAX_REQUEST_BYTES)} bytes (16 MiB). A value below ${String(MINIMUM_BRIDGE_MAX_REQUEST_BYTES)} bytes cannot carry the largest admitted symbol-name command, and a larger value is refused so a worst-case U+0001 command plus its authenticated envelope stays one string under Node's single-string ceiling.`;
 
 const decimalInteger = /^[1-9]\d*$/u;
 

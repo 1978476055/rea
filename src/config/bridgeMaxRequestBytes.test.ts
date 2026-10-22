@@ -60,6 +60,36 @@ it("accepts a caller-selected ceiling inside the floor and maximum", () => {
   ).toContain("source setting");
 });
 
+it("derives the maximum from the worst-case authenticated Cutter frame", () => {
+  const stringCeiling = 536_870_888;
+  const frame = (command: string): number =>
+    Buffer.byteLength(
+      JSON.stringify({
+        request: JSON.stringify({
+          kind: "command",
+          request_id: session,
+          expected_generation: Number.MAX_SAFE_INTEGER,
+          command,
+          json: false,
+          session_id: session,
+        }),
+        proof: token,
+      }),
+    );
+  const empty = frame("");
+  const perUnit = frame("\u0001") - empty;
+  expect(empty).toBe(296);
+  expect(perUnit).toBe(7);
+  const derived = Math.floor((stringCeiling - empty) / perUnit);
+  expect(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES).toBe(derived);
+  expect(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES).toBe(76_695_798);
+  expect(empty + perUnit * derived).toBeLessThanOrEqual(stringCeiling);
+  expect(empty + perUnit * (derived + 1)).toBeGreaterThan(stringCeiling);
+  expect(MAXIMUM_BRIDGE_MAX_REQUEST_BYTES).toBeGreaterThan(
+    DEFAULT_BRIDGE_MAX_REQUEST_BYTES,
+  );
+});
+
 it("locks the floor to the authenticated frame of the largest bounded symbol name", () => {
   const hopper = Buffer.byteLength(
     JSON.stringify({
