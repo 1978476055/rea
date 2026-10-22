@@ -127,6 +127,26 @@ def _frame_limit_exceeded():
 
 SOCKET_TIMEOUT_SECONDS = 20
 AUTH_FRAME_TIMEOUT_SECONDS = 1
+# The client request deadline. The authenticated frame read may use up to
+# this long; it does not grow past it when the byte ceiling is raised.
+REQUEST_DEADLINE_SECONDS = 25
+
+
+def _authenticated_frame_timeout_seconds():
+    """Time to hash and transfer one maximum-sized authenticated frame.
+
+    The hello frame stays at one second. The following command frame is
+    built only after that challenge, so its read budget follows the
+    configured payload size, at one second per mebibyte, and never exceeds
+    the 25 second client deadline.
+    """
+    mebibytes = (MAX_FRAME_BYTES + (1024 * 1024) - 1) // (1024 * 1024)
+    return min(
+        REQUEST_DEADLINE_SECONDS,
+        max(AUTH_FRAME_TIMEOUT_SECONDS, mebibytes),
+    )
+
+
 MAX_DESCRIPTOR_BYTES = 64 * 1024
 MAX_COMPLETION_RECEIPTS = 64
 
@@ -647,7 +667,9 @@ class _BridgeServer(threading.Thread):
                     server_nonce = f"{connection_ordinal:016x}{secrets.token_hex(24)}"
                     server_proof = hmac.new(self.token.encode(), f"rea-cutter-server-v2:{self.session_id}:{client_nonce}:{server_nonce}".encode(), hashlib.sha256).hexdigest()
                     self._send(connection, {"session_id": self.session_id, "nonce": server_nonce, "proof": server_proof})
-                    authenticated_frame = self._receive_frame(connection)
+                    authenticated_frame = self._receive_frame(
+                        connection, _authenticated_frame_timeout_seconds()
+                    )
                     request_bytes = authenticated_frame.get("request") if isinstance(authenticated_frame, dict) else None
                     expected_proof = hmac.new(self.token.encode(), f"rea-cutter-client-v2:{self.session_id}:{client_nonce}:{server_nonce}:{request_bytes}".encode(), hashlib.sha256).hexdigest()
                     if not isinstance(request_bytes, str) or not isinstance(authenticated_frame.get("proof"), str) or not hmac.compare_digest(authenticated_frame["proof"], expected_proof):
@@ -713,9 +735,12 @@ class _BridgeServer(threading.Thread):
             pass
 
     @staticmethod
-    def _receive_frame(connection: socket.socket) -> dict[str, Any]:
+    def _receive_frame(
+        connection: socket.socket,
+        timeout_seconds: float = AUTH_FRAME_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
         data = bytearray()
-        deadline = time.monotonic() + AUTH_FRAME_TIMEOUT_SECONDS
+        deadline = time.monotonic() + timeout_seconds
         while b"\n" not in data:
             if len(data) > MAX_FRAME_BYTES:
                 raise _frame_limit_exceeded()

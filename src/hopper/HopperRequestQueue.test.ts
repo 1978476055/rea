@@ -352,3 +352,15 @@ describe("HopperRequestQueue caller abort reasons", () => {
     expect(sent).toEqual([1]);
   });
 });
+
+it("sends the measured frame instead of serializing the request again", async () => {
+  const frames: string[] = [];
+  const queue = new HopperRequestQueue((request) =>
+    frames.push(request.frame ?? ""),
+  );
+  const frame = `${JSON.stringify({ id: 7, token: "t", method: "echo", params: { value: "A" } })}\n`;
+  const pending = queue.run(7, "echo", { value: "A" }, { frame });
+  expect(frames).toEqual([frame]);
+  queue.accept(7, ok({ value: "A" }));
+  await expect(pending).resolves.toEqual({ ok: true, value: { value: "A" } });
+});

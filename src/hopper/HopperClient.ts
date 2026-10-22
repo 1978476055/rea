@@ -212,7 +212,7 @@ export class HopperClient {
         options.bridgeMaxRequestBytes ?? DEFAULT_BRIDGE_MAX_REQUEST,
     };
     this.#requests = new HopperRequestQueue(
-      ({ id, method, params }, failed) => {
+      ({ id, method, params, frame }, failed) => {
         const socket = this.#socket;
         const token = this.#token;
         if (socket === undefined || socket.destroyed || token === undefined) {
@@ -220,7 +220,7 @@ export class HopperClient {
           return;
         }
         socket.write(
-          `${JSON.stringify({ id, token, method, params })}\n`,
+          frame ?? `${JSON.stringify({ id, token, method, params })}\n`,
           (cause) => {
             if (cause !== undefined && cause !== null) failed();
           },
@@ -1084,8 +1084,10 @@ export class HopperClient {
           "Hopper",
         ),
       );
+    const frame = `${payload}\n`;
     const startedAt = performance.now();
     const result = await this.#requests.run(id, method, params, {
+      frame,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       ...(options.timeoutMs === undefined
         ? {}

@@ -22,6 +22,8 @@ const MAX_TIMEOUT_MS = 2_147_483_647;
 
 export interface HopperRequestQueueOptions {
   readonly signal?: AbortSignal;
+  /** Already measured `{id,token,method,params}\\n` payload. */
+  readonly frame?: string;
   /** Caller deadline from admission, including time waiting in the FIFO. */
   readonly timeoutMs?: number;
   readonly progress?: ProgressReporter;
@@ -40,6 +42,8 @@ type RequestSender = (
     readonly id: number;
     readonly method: string;
     readonly params: JsonValue;
+    /** Exact measured payload, including the trailing LF. */
+    readonly frame?: string;
   },
   failed: () => void,
 ) => void;
@@ -48,6 +52,7 @@ interface QueuedRequest {
   readonly id: number;
   readonly method: string;
   readonly params: JsonValue;
+  readonly frame: string | undefined;
   readonly signal: AbortSignal | undefined;
   readonly progress: ProgressReporter | undefined;
   readonly resolve: (result: HopperRequestResult) => void;
@@ -112,6 +117,7 @@ export class HopperRequestQueue {
         id,
         method,
         params,
+        frame: options.frame,
         signal: options.signal,
         progress: options.progress,
         resolve,
@@ -272,7 +278,12 @@ export class HopperRequestQueue {
     try {
       entry.transmitted = true;
       this.send(
-        { id: entry.id, method: entry.method, params: entry.params },
+        {
+          id: entry.id,
+          method: entry.method,
+          params: entry.params,
+          ...(entry.frame === undefined ? {} : { frame: entry.frame }),
+        },
         () =>
           this.accept(
             entry.id,
