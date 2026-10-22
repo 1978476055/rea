@@ -784,6 +784,22 @@ class BridgeRequestCeilingTest(unittest.TestCase):
         self.assertEqual(preserved["document_generation"], 0)
         self.assertNotIn("cutter_version", preserved)
 
+    def test_dense_primitive_array_uses_its_encoded_size(self):
+        module = _load_cutter_bridge("dense", "8192")
+        zeros = [0] * 2000
+        value = {"ok": True, "output": zeros, "execution_state": "complete"}
+        self.assertTrue(module._within_response_limit(value))
+        server = module._BridgeServer.__new__(module._BridgeServer)
+        server.token = "token"
+        server.session_id = "00000000-0000-4000-8000-000000000001"
+        encoded = server._encode_authenticated_response(value, "a" * 64, "b" * 64)
+        self.assertIsNotNone(encoded)
+        response = json.loads(json.loads(encoded)["response"])
+        self.assertEqual(response["output"], zeros)
+        self.assertNotIn("output_truncated", response)
+        overflow = {"ok": True, "output": [0] * 8000, "execution_state": "complete"}
+        self.assertFalse(module._within_response_limit(overflow))
+
     def test_invalid_ceilings_are_refused(self):
         for raw in ("7463", "536870888", "0", "-1", "abc", "016777216"):
             with self.assertRaises(RuntimeError) as caught:

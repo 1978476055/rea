@@ -962,13 +962,22 @@ def _within_response_limit(value: Any) -> bool:
                     # Unencodable output also needs the signed omission fallback.
                     return False
             size += current.count('"') + current.count("\\")
-            size += sum(5 for character in current if ord(character) < 0x20)
+            # A short escape is two JSON bytes and was already counted as one.
+            # Other controls expand to a six-byte \\u00XX sequence.
+            size += sum(
+                1 if ord(character) in (0x08, 0x09, 0x0A, 0x0C, 0x0D) else 5
+                for character in current
+                if ord(character) < 0x20
+            )
         elif isinstance(current, dict):
             identity = id(current)
             if identity in seen:
                 return False
             seen.add(identity)
-            size += 2 + 4 * len(current)
+            count = len(current)
+            # Braces, one colon per entry, and commas between entries.
+            # Keys and values are counted when they are visited.
+            size += 2 + count + max(0, count - 1)
             if size > MAX_FRAME_BYTES:
                 return False
             pending.extend(current.keys())
@@ -978,12 +987,29 @@ def _within_response_limit(value: Any) -> bool:
             if identity in seen:
                 return False
             seen.add(identity)
-            size += 2 + 2 * len(current)
+            count = len(current)
+            # Brackets and commas between items. Each item is counted below.
+            size += 2 + max(0, count - 1)
             if size > MAX_FRAME_BYTES:
                 return False
             pending.extend(current)
+        elif current is None:
+            size += 4
+        elif current is True:
+            size += 4
+        elif current is False:
+            size += 5
+        elif isinstance(current, int):
+            size += len(str(current))
+        elif isinstance(current, float):
+            size += len(json.dumps(current, separators=(",", ":")))
         else:
-            size += 16
+            try:
+                size += len(
+                    json.dumps(current, ensure_ascii=False, separators=(",", ":"))
+                )
+            except (TypeError, ValueError):
+                return False
         if size > MAX_FRAME_BYTES:
             return False
     return True
