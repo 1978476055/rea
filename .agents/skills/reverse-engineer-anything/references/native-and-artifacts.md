@@ -296,6 +296,18 @@ Exported C and embedded resources remain useful independent evidence, but a
 timeout does not establish complete analysis or absence of code. See the
 [deadline and client guide](https://github.com/morluto/rea/blob/main/docs/mcp-contracts.md#ghidra-first-query-deadlines-and-recovery).
 
+## Bridge request ceiling
+
+Hopper and Cutter share `REA_BRIDGE_MAX_REQUEST_BYTES`. Unset, both sides use
+16777216 bytes. The payload budget excludes the terminating LF. A decimal
+integer from 7464 to 268435456 raises or lowers that ceiling. Invalid values
+are configuration errors and do not fall back to 16777216. Set the variable in
+the environment that starts REA, restart REA, and start Hopper or Cutter from
+that same environment. An out-of-band bridge without the setting stays at
+16777216 bytes. The client reports that mismatch and does not send the command.
+The 25000 ms Cutter request deadline and the 256-candidate discovery budget
+still have no runtime override.
+
 ## Static memory and original file bytes
 
 For Ghidra, `read_bytes` reads initialized analysis memory, including loader

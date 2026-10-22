@@ -70,17 +70,30 @@ Captured stdout and stderr are retained up to a 16 MiB combined limit; `output_t
 Cutter commands use the local REA Python bridge and authenticated loopback messages.
 The client and plugin must support the current v2 handshake; older peers are
 rejected before dispatch because they cannot preserve cross-caller recovery proof.
-The client checks the final encoded request against the bridge's 16 MiB frame
-limit before dispatch; the 16 MiB budget applies to request payload bytes and
-excludes the terminating LF. The bridge accepts that full payload size and
-rejects larger or incomplete frames while bounding the read; an oversized
-command does not retain a cleanup owner. Hopper uses the same request payload
-budget.
+The client checks the final encoded request against
+`REA_BRIDGE_MAX_REQUEST_BYTES` before dispatch. The budget applies to request
+payload bytes and excludes the terminating LF. Unset, the ceiling is 16777216
+bytes (16 MiB). A decimal integer from 7464 to 268435456 is accepted. The floor
+fits the largest bounded symbol-name command inside an authenticated Cutter
+frame. The maximum is 256 MiB so the decoded request stays one string below
+Node's single-string ceiling. Zero, negative, non-decimal, and out-of-range
+values are `configuration_invalid` and do not fall back to the default. The
+bridge accepts that full payload size and rejects a larger payload while
+bounding the read. An incomplete frame is still `Incomplete bridge request
+frame`. An oversized command does not retain a cleanup owner. Hopper uses the
+same request payload budget. REA injects a caller-selected value into the
+Hopper bootstrap and the bridge also reads the process environment; an injected
+value wins. Cutter reads the environment that starts Cutter and publishes
+`max_request_bytes` on its session descriptor. A Hopper or Cutter process
+started out of band without the setting uses 16777216 bytes. The client
+compares that advertisement with its own ceiling and reports the mismatch
+before sending a command. Cutter response frames use this same ceiling. Hopper
+response reads are unchanged.
 Each bridge request waits 25000 ms. Discovery admits at most 256 descriptor
 candidates and reads and probes at most eight concurrently. A larger directory
 reports `bridge_directory_capacity_exceeded`. This release has no runtime
-override for the 25000 ms request deadline, the 16777216 byte frame, or the
-256-candidate discovery budget.
+override for the 25000 ms request deadline or the 256-candidate discovery
+budget. Those limits do not follow `REA_BRIDGE_MAX_REQUEST_BYTES`.
 
 Terminal receipts are recovered before another command, including from a new CLI
 invocation. A signed status response also confirms completion of older bridge

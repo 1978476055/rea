@@ -613,6 +613,84 @@ class RequestFrameLimitTest(unittest.TestCase):
             bridge._BridgeServer._receive_frame(BufferedSocket(payload + b" " + b"\n"))
 
 
+def _load_cutter_bridge(suffix, raw):
+    """Import a fresh plugin module under one explicit ceiling."""
+    name = "rea_cutter_bridge_limit_%s" % suffix
+    sys.modules.pop(name, None)
+    setting = "REA_BRIDGE_MAX_REQUEST_BYTES"
+    previous = os.environ.get(setting)
+    if raw is None:
+        os.environ.pop(setting, None)
+    else:
+        os.environ[setting] = raw
+    try:
+        spec = importlib.util.spec_from_file_location(name, MODULE_PATH)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        if previous is None:
+            os.environ.pop(setting, None)
+        else:
+            os.environ[setting] = previous
+
+
+class _BufferedSocket:
+    def __init__(self, data):
+        self.data = data
+
+    def settimeout(self, _timeout):
+        pass
+
+    def recv(self, count):
+        part, self.data = self.data[:count], self.data[count:]
+        return part
+
+
+class BridgeRequestCeilingTest(unittest.TestCase):
+    def test_unset_ceiling_matches_the_historical_16_mib_constant(self):
+        module = _load_cutter_bridge("default", None)
+        self.assertEqual(module.MAX_FRAME_BYTES, 16 * 1024 * 1024)
+        self.assertEqual(module.BRIDGE_MAX_REQUEST_BYTES_SOURCE, "default")
+        self.assertEqual(module.MINIMUM_BRIDGE_MAX_REQUEST_BYTES, 7464)
+        self.assertEqual(module.MAXIMUM_BRIDGE_MAX_REQUEST_BYTES, 256 * 1024 * 1024)
+        payload = b"{}" + b" " * (module.MAX_FRAME_BYTES - 2)
+        self.assertEqual(
+            module._BridgeServer._receive_frame(_BufferedSocket(payload + b"\n")),
+            {},
+        )
+
+    def test_setting_lowers_and_raises_the_frame_ceiling(self):
+        lowered = _load_cutter_bridge("lowered", "8192")
+        self.assertEqual(lowered.MAX_FRAME_BYTES, 8192)
+        self.assertEqual(lowered.BRIDGE_MAX_REQUEST_BYTES_SOURCE, "setting")
+        accepted = b"{}" + b" " * (8192 - 2)
+        self.assertEqual(
+            lowered._BridgeServer._receive_frame(_BufferedSocket(accepted + b"\n")),
+            {},
+        )
+        with self.assertRaisesRegex(ValueError, "frame-limit-exceeded") as lowered_error:
+            lowered._BridgeServer._receive_frame(
+                _BufferedSocket(accepted + b" " + b"\n")
+            )
+        self.assertIn("REA_BRIDGE_MAX_REQUEST_BYTES", str(lowered_error.exception))
+        raised = _load_cutter_bridge("raised", str(17 * 1024 * 1024))
+        self.assertEqual(raised.MAX_FRAME_BYTES, 17 * 1024 * 1024)
+        above_default = b"{}" + b" " * (16 * 1024 * 1024 - 1)
+        self.assertGreater(len(above_default), 16 * 1024 * 1024)
+        self.assertEqual(
+            raised._BridgeServer._receive_frame(_BufferedSocket(above_default + b"\n")),
+            {},
+        )
+
+    def test_invalid_ceilings_are_refused(self):
+        for raw in ("7463", "268435457", "0", "-1", "abc", "016777216"):
+            with self.assertRaises(RuntimeError) as caught:
+                _load_cutter_bridge("invalid_%s" % raw, raw)
+            self.assertIn("REA_BRIDGE_MAX_REQUEST_BYTES", str(caught.exception))
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["--serve"]:
         run_serve_mode()

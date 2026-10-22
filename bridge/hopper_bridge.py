@@ -14,9 +14,87 @@ from typing import Any, Optional, Protocol, Sequence
 BAD_ADDRESSES = (-1, 0xFFFFFFFFFFFFFFFF, None)
 # The native label setter truncates NSString names at this UTF-16 extent.
 HOPPER_SYMBOL_NAME_UTF16_UNITS = 1024
-# Maximum request JSON payload size in bytes, excluding its trailing LF.
-# Matches the Cutter bridge's MAX_FRAME_BYTES payload ceiling.
-MAX_REQUEST_BYTES = 16 * 1024 * 1024
+# Request JSON payload budget in bytes, excluding the trailing LF.
+# REA_BRIDGE_MAX_REQUEST_BYTES selects it. Unset stays 16777216.
+# 7464 is the authenticated Cutter frame of the largest bounded symbol name.
+# 268435456 (256 MiB) keeps the decoded request under Node's string ceiling.
+_BRIDGE_MAX_REQUEST_BYTES_SETTING = "REA_BRIDGE_MAX_REQUEST_BYTES"
+DEFAULT_BRIDGE_MAX_REQUEST_BYTES = 16 * 1024 * 1024
+MINIMUM_BRIDGE_MAX_REQUEST_BYTES = 7464
+MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = 256 * 1024 * 1024
+
+
+def _bridge_max_request_bytes_constraint():
+    return (
+        "REA_BRIDGE_MAX_REQUEST_BYTES must be a positive decimal integer "
+        "from %d to %d bytes; the default is %d bytes (16 MiB). "
+        "A value below %d bytes cannot carry the largest admitted "
+        "symbol-name command, and a larger value is refused so the request "
+        "stays one string under Node's single-string ceiling."
+        % (
+            MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            MAXIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            DEFAULT_BRIDGE_MAX_REQUEST_BYTES,
+            MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
+        )
+    )
+
+
+def _parse_bridge_max_request_bytes(raw):
+    """Refuse a non-decimal or out-of-range ceiling. Never fall back."""
+    constraint = _bridge_max_request_bytes_constraint()
+    if isinstance(raw, bool):
+        raise RuntimeError(constraint)
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        if raw == "" or not raw.isdigit() or raw[0] == "0":
+            raise RuntimeError(constraint)
+        value = int(raw)
+    else:
+        raise RuntimeError(constraint)
+    if (
+        value < MINIMUM_BRIDGE_MAX_REQUEST_BYTES
+        or value > MAXIMUM_BRIDGE_MAX_REQUEST_BYTES
+    ):
+        raise RuntimeError(constraint)
+    return value
+
+
+def _resolve_bridge_max_request_bytes():
+    """Prefer the bootstrap injection, then the process environment, then 16 MiB."""
+    injected = globals().get(_BRIDGE_MAX_REQUEST_BYTES_SETTING)
+    if injected is not None:
+        return _parse_bridge_max_request_bytes(injected), "setting"
+    raw = os.environ.get(_BRIDGE_MAX_REQUEST_BYTES_SETTING)
+    if raw is None:
+        return DEFAULT_BRIDGE_MAX_REQUEST_BYTES, "default"
+    return _parse_bridge_max_request_bytes(raw), "setting"
+
+
+MAX_REQUEST_BYTES, BRIDGE_MAX_REQUEST_BYTES_SOURCE = (
+    _resolve_bridge_max_request_bytes()
+)
+
+
+def _bridge_max_request_bytes_recovery():
+    return (
+        "The effective REA_BRIDGE_MAX_REQUEST_BYTES value is %d bytes "
+        "(source %s; default %d, floor %d, maximum %d). "
+        "Set REA_BRIDGE_MAX_REQUEST_BYTES in the environment that starts REA "
+        "to a decimal integer from %d to %d, then restart REA. "
+        "Restart Hopper or Cutter from that same environment so the bridge "
+        "uses this ceiling."
+        % (
+            MAX_REQUEST_BYTES,
+            BRIDGE_MAX_REQUEST_BYTES_SOURCE,
+            DEFAULT_BRIDGE_MAX_REQUEST_BYTES,
+            MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            MAXIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            MAXIMUM_BRIDGE_MAX_REQUEST_BYTES,
+        )
+    )
 _rea_session_document = None
 _search_inventory_cache = {}
 _pseudocode_cache = {}
@@ -743,6 +821,7 @@ def _dispatch(method, params):
             "version": "1.0.0",
             "run_id": REA_RUN_ID,
             "process_id": os.getpid(),
+            "max_request_bytes": MAX_REQUEST_BYTES,
         }
     if method in ("shutdown", "shutdown_document"):
         document = _session_document()
@@ -1071,8 +1150,8 @@ def _serve_connection(connection):
                 break
             if not line.endswith(b"\n"):
                 message = (
-                    "Bridge request exceeds the %d-byte payload limit"
-                    % MAX_REQUEST_BYTES
+                    "Bridge request exceeds the %d-byte payload limit. %s"
+                    % (MAX_REQUEST_BYTES, _bridge_max_request_bytes_recovery())
                     if len(line) > MAX_REQUEST_BYTES
                     else "Incomplete bridge request frame"
                 )

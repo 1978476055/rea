@@ -29,6 +29,14 @@ import { err, ok, type Result } from "../domain/result.js";
 import { requireWindowsNativeAuthority } from "../windows/WindowsNativeLoader.js";
 import { readBoundedFileBytes } from "../process/BoundedFileBytes.js";
 import { homeDirectoryFromEnvironment } from "../config/homeDirectory.js";
+import {
+  bridgeRequestLimitMismatchError,
+  bridgeRequestOversizeError,
+  bridgeResponseOversizeError,
+  DEFAULT_BRIDGE_MAX_REQUEST_BYTES,
+  resolveBridgeMaxRequestBytes,
+  type BridgeMaxRequestBytes,
+} from "../config/bridgeMaxRequestBytes.js";
 
 const descriptorSchema = z.object({
   session_id: z.string().uuid(),
@@ -40,6 +48,7 @@ const descriptorSchema = z.object({
   current_file: z.string().nullable(),
   cutter_version: z.string().nullable(),
   identity_status: z.literal("partial"),
+  max_request_bytes: z.int().positive().optional(),
 });
 
 export const CUTTER_PROVIDER_IDENTITY = {
@@ -81,17 +90,20 @@ const acknowledgementSchema = z.object({
   acknowledged: z.boolean(),
 });
 const MAX_DESCRIPTOR_BYTES = 64 * 1024;
-const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const FRAME_PAGE_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 25_000;
-// Bound admitted descriptor input bytes and concurrent file/socket handles.
-const MAX_DESCRIPTOR_CANDIDATES = MAX_FRAME_BYTES / MAX_DESCRIPTOR_BYTES;
+// Discovery stays at the historical 16 MiB descriptor budget. It does not
+// follow REA_BRIDGE_MAX_REQUEST_BYTES.
+const DISCOVERY_CANDIDATE_BUDGET_BYTES = 16 * 1024 * 1024;
+const MAX_DESCRIPTOR_CANDIDATES =
+  DISCOVERY_CANDIDATE_BUDGET_BYTES / MAX_DESCRIPTOR_BYTES;
 const DISCOVERY_CONCURRENCY = 8;
 type AuthenticatedRequestBytes = string & {
   readonly __authenticatedRequestBytes: unique symbol;
 };
 
 const serializeRequest = (
+  limit: BridgeMaxRequestBytes,
   descriptor: z.infer<typeof descriptorSchema>,
   request: Readonly<Record<string, unknown>>,
 ): AuthenticatedRequestBytes => {
@@ -104,25 +116,27 @@ const serializeRequest = (
     Buffer.byteLength(requestBytes);
   for (const character of requestBytes)
     if (character === '"' || character === "\\") frameBytes += 1;
-  if (frameBytes > MAX_FRAME_BYTES)
-    throw new AnalysisResourceConstraintError(
+  if (frameBytes > limit.maximumBytes)
+    throw bridgeRequestOversizeError(
       "cutter_command",
-      "transport",
-      `Cutter request exceeds its authenticated frame limit of ${String(MAX_FRAME_BYTES)} bytes (16 MiB); no command was sent. This release has no runtime override.`,
-      { frame_bytes: frameBytes, max_frame_bytes: MAX_FRAME_BYTES },
-      {
-        remediationAction: `Shorten the Cutter command. This ${String(MAX_FRAME_BYTES)} byte frame limit has no runtime override.`,
-      },
+      limit,
+      frameBytes,
+      "Cutter",
     );
   return requestBytes as AuthenticatedRequestBytes;
 };
 
 class CutterBridgeResponseFrames {
+  readonly #limit: BridgeMaxRequestBytes;
   #parts: Buffer[] = [];
   #page = Buffer.allocUnsafe(FRAME_PAGE_BYTES);
   #pageLength = 0;
   #contentBytes = 0;
   #framesRead = 0;
+
+  constructor(limit: BridgeMaxRequestBytes) {
+    this.#limit = limit;
+  }
 
   push(chunk: Buffer, onFrame: (line: Buffer) => boolean): void {
     let offset = 0;
@@ -132,17 +146,13 @@ class CutterBridgeResponseFrames {
       const segment = chunk.subarray(offset, end);
       if (
         this.#contentBytes + segment.length + (delimiter < 0 ? 1 : 0) >
-        MAX_FRAME_BYTES
+        this.#limit.maximumBytes
       )
-        throw new Error(
-          `Cutter bridge response exceeded its framed transport limit of ${String(MAX_FRAME_BYTES)} bytes (16 MiB). This release has no runtime override`,
-        );
+        throw bridgeResponseOversizeError(this.#limit);
       this.#append(segment);
       if (delimiter < 0) return;
-      if (++this.#contentBytes > MAX_FRAME_BYTES)
-        throw new Error(
-          `Cutter bridge response exceeded its framed transport limit of ${String(MAX_FRAME_BYTES)} bytes (16 MiB). This release has no runtime override`,
-        );
+      if (++this.#contentBytes > this.#limit.maximumBytes)
+        throw bridgeResponseOversizeError(this.#limit);
       if (this.#pageLength > 0)
         this.#parts.push(this.#page.subarray(0, this.#pageLength));
       const line = Buffer.concat(this.#parts, this.#contentBytes - 1);
@@ -269,7 +279,7 @@ interface CutterBridgeClientOptions {
 
 export type CutterBridgeSession = Omit<
   z.infer<typeof descriptorSchema>,
-  "token" | "host" | "port"
+  "token" | "host" | "port" | "max_request_bytes"
 >;
 export interface CutterBridgeDiscovery {
   readonly sessions: readonly CutterBridgeSession[];
@@ -289,6 +299,7 @@ export interface CutterBridgeDiscovery {
 
 /** Discovers and communicates with REA Python bridge plugins in live Cutter processes. */
 export class CutterBridgeClient {
+  readonly #maxRequestBytes: BridgeMaxRequestBytes;
   readonly #directory: string;
   readonly #descriptorResources = new ArtifactResourceScope();
   readonly #platform: NodeJS.Platform;
@@ -299,6 +310,7 @@ export class CutterBridgeClient {
     environment: Readonly<NodeJS.ProcessEnv> = process.env,
     options: CutterBridgeClientOptions = {},
   ) {
+    this.#maxRequestBytes = resolveBridgeMaxRequestBytes(environment);
     const configured = environment.REA_CUTTER_BRIDGE_DIR;
     const localAppData = environment.LOCALAPPDATA;
     this.#platform = options.platform ?? process.platform;
@@ -370,7 +382,7 @@ export class CutterBridgeClient {
           const status = responseSchema.safeParse(
             await this.#request(
               descriptor,
-              serializeRequest(descriptor, {
+              serializeRequest(this.#maxRequestBytes, descriptor, {
                 kind: "status",
                 session_id: descriptor.session_id,
               }),
@@ -434,8 +446,17 @@ export class CutterBridgeClient {
       assertBridgeActive(input.signal, "cutter_command");
       const descriptor = await this.#find(input.sessionId, input.signal);
       assertBridgeActive(input.signal, "cutter_command");
+      const advertised =
+        descriptor.max_request_bytes ?? DEFAULT_BRIDGE_MAX_REQUEST_BYTES;
+      if (advertised !== this.#maxRequestBytes.maximumBytes)
+        throw bridgeRequestLimitMismatchError(
+          "cutter_command",
+          this.#maxRequestBytes,
+          advertised,
+          "Cutter",
+        );
       const requestId = randomUUID();
-      const commandRequest = serializeRequest(descriptor, {
+      const commandRequest = serializeRequest(this.#maxRequestBytes, descriptor, {
         kind: "command",
         request_id: requestId,
         expected_generation: input.expectedGeneration,
@@ -617,7 +638,7 @@ export class CutterBridgeClient {
   ): Promise<z.infer<typeof responseSchema>> {
     const raw = await this.#request(
       descriptor,
-      serializeRequest(descriptor, {
+      serializeRequest(this.#maxRequestBytes, descriptor, {
         kind: "status",
         session_id: descriptor.session_id,
       }),
@@ -666,7 +687,7 @@ export class CutterBridgeClient {
     try {
       const raw = await this.#request(
         descriptor,
-        serializeRequest(descriptor, {
+        serializeRequest(this.#maxRequestBytes, descriptor, {
           kind: "ack",
           request_id: requestId,
         }),
@@ -945,7 +966,7 @@ export class CutterBridgeClient {
         host: descriptor.host,
         port: descriptor.port,
       });
-      const frames = new CutterBridgeResponseFrames();
+      const frames = new CutterBridgeResponseFrames(this.#maxRequestBytes);
       let completion: (() => void) | undefined;
       let requestSent = false;
       let authenticated = false;
@@ -1046,7 +1067,11 @@ export class CutterBridgeClient {
               return false;
             }
           });
-        } catch {
+        } catch (cause) {
+          if (cause instanceof AnalysisResourceConstraintError) {
+            finish(() => reject(cause));
+            return;
+          }
           rejectRequest("Cutter bridge peer authentication or response failed");
         }
       });

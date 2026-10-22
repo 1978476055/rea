@@ -33,7 +33,96 @@ except ImportError:
     from PySide2.QtCore import QCoreApplication, QObject, Signal
 
 
-MAX_FRAME_BYTES = 16 * 1024 * 1024
+# Request and response frame budget in bytes, excluding the trailing LF.
+# REA_BRIDGE_MAX_REQUEST_BYTES selects it. Unset stays 16777216.
+# 7464 is the authenticated frame of the largest bounded symbol name.
+# 268435456 (256 MiB) keeps the decoded request under Node's string ceiling.
+_BRIDGE_MAX_REQUEST_BYTES_SETTING = "REA_BRIDGE_MAX_REQUEST_BYTES"
+DEFAULT_BRIDGE_MAX_REQUEST_BYTES = 16 * 1024 * 1024
+MINIMUM_BRIDGE_MAX_REQUEST_BYTES = 7464
+MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = 256 * 1024 * 1024
+
+
+def _bridge_max_request_bytes_constraint():
+    return (
+        "REA_BRIDGE_MAX_REQUEST_BYTES must be a positive decimal integer "
+        "from %d to %d bytes; the default is %d bytes (16 MiB). "
+        "A value below %d bytes cannot carry the largest admitted "
+        "symbol-name command, and a larger value is refused so the request "
+        "stays one string under Node's single-string ceiling."
+        % (
+            MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            MAXIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            DEFAULT_BRIDGE_MAX_REQUEST_BYTES,
+            MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
+        )
+    )
+
+
+def _parse_bridge_max_request_bytes(raw):
+    """Refuse a non-decimal or out-of-range ceiling. Never fall back."""
+    constraint = _bridge_max_request_bytes_constraint()
+    if isinstance(raw, bool):
+        raise RuntimeError(constraint)
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        if raw == "" or not raw.isdigit() or raw[0] == "0":
+            raise RuntimeError(constraint)
+        value = int(raw)
+    else:
+        raise RuntimeError(constraint)
+    if (
+        value < MINIMUM_BRIDGE_MAX_REQUEST_BYTES
+        or value > MAXIMUM_BRIDGE_MAX_REQUEST_BYTES
+    ):
+        raise RuntimeError(constraint)
+    return value
+
+
+def _resolve_bridge_max_request_bytes():
+    """Prefer an injected global, then the process environment, then 16 MiB."""
+    injected = globals().get(_BRIDGE_MAX_REQUEST_BYTES_SETTING)
+    if injected is not None:
+        return _parse_bridge_max_request_bytes(injected), "setting"
+    raw = os.environ.get(_BRIDGE_MAX_REQUEST_BYTES_SETTING)
+    if raw is None:
+        return DEFAULT_BRIDGE_MAX_REQUEST_BYTES, "default"
+    return _parse_bridge_max_request_bytes(raw), "setting"
+
+
+MAX_FRAME_BYTES, BRIDGE_MAX_REQUEST_BYTES_SOURCE = (
+    _resolve_bridge_max_request_bytes()
+)
+
+
+def _bridge_max_request_bytes_recovery():
+    return (
+        "The effective REA_BRIDGE_MAX_REQUEST_BYTES value is %d bytes "
+        "(source %s; default %d, floor %d, maximum %d). "
+        "Set REA_BRIDGE_MAX_REQUEST_BYTES in the environment that starts REA "
+        "to a decimal integer from %d to %d, then restart REA. "
+        "Restart Hopper or Cutter from that same environment so the bridge "
+        "uses this ceiling."
+        % (
+            MAX_FRAME_BYTES,
+            BRIDGE_MAX_REQUEST_BYTES_SOURCE,
+            DEFAULT_BRIDGE_MAX_REQUEST_BYTES,
+            MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            MAXIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            MINIMUM_BRIDGE_MAX_REQUEST_BYTES,
+            MAXIMUM_BRIDGE_MAX_REQUEST_BYTES,
+        )
+    )
+
+
+def _frame_limit_exceeded():
+    return ValueError(
+        "frame-limit-exceeded: Bridge request exceeds the %d-byte payload limit. %s"
+        % (MAX_FRAME_BYTES, _bridge_max_request_bytes_recovery())
+    )
+
+
 SOCKET_TIMEOUT_SECONDS = 20
 AUTH_FRAME_TIMEOUT_SECONDS = 1
 MAX_DESCRIPTOR_BYTES = 64 * 1024
@@ -500,6 +589,7 @@ class _BridgeServer(threading.Thread):
             "current_file": self.dispatcher.current_file,
             "cutter_version": self.dispatcher.cutter_version,
             "identity_status": "partial",
+            "max_request_bytes": MAX_FRAME_BYTES,
         }
         if os.name == "nt":
             _write_windows_descriptor(self.directory, self.descriptor, json.dumps(payload).encode("utf-8"))
@@ -626,7 +716,7 @@ class _BridgeServer(threading.Thread):
         deadline = time.monotonic() + AUTH_FRAME_TIMEOUT_SECONDS
         while b"\n" not in data:
             if len(data) > MAX_FRAME_BYTES:
-                raise ValueError("frame-limit-exceeded")
+                raise _frame_limit_exceeded()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise socket.timeout("authentication frame timed out")
@@ -638,7 +728,9 @@ class _BridgeServer(threading.Thread):
                 raise ValueError("incomplete authentication frame")
             data.extend(part)
         line, remainder = bytes(data).split(b"\n", 1)
-        if len(line) > MAX_FRAME_BYTES or remainder:
+        if len(line) > MAX_FRAME_BYTES:
+            raise _frame_limit_exceeded()
+        if remainder:
             raise ValueError("invalid framed request")
         value = json.loads(line)
         return value if isinstance(value, dict) else {}
