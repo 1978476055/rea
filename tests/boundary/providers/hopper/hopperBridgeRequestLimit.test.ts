@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import { AnalysisResourceConstraintError } from "../../../../src/domain/analysisErrorCore.js";
 import { HopperClient } from "../../../../src/hopper/HopperClient.js";
@@ -67,6 +67,59 @@ it("refuses an oversized Hopper request before the fixture receives it", async (
   expect(launcher.requests.map(({ method }) => method)).not.toContain(
     "set_address_name",
   );
+});
+
+it("refuses a Hopper payload whose JSON expansion exceeds the ceiling before serializing it", async () => {
+  const launcher = new HopperFixtureLauncher(
+    undefined,
+    "quiet",
+    "ready",
+    "acknowledge",
+    "none",
+    8192,
+  );
+  const client = trackHopperClient(
+    new HopperClient({
+      launcher,
+      startupTimeoutMs: 10_000,
+      bridgeMaxRequestBytes: limit(8192),
+    }),
+  );
+  expect((await client.start()).ok).toBe(true);
+  const name = "\u0001".repeat(2000);
+  const stringify = vi.spyOn(JSON, "stringify");
+  try {
+    const refused = await client.callTool("set_address_name", {
+      address: "0x1",
+      name,
+    });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.error).toBeInstanceOf(AnalysisResourceConstraintError);
+    if (!(refused.error instanceof AnalysisResourceConstraintError)) return;
+    expect(refused.error.reason).toContain("8192");
+    expect(refused.error.reason).toContain("no request was sent");
+    expect(refused.error.reason).toContain("REA_BRIDGE_MAX_REQUEST_BYTES");
+    expect(launcher.requests.map(({ method }) => method)).not.toContain(
+      "set_address_name",
+    );
+    expect(
+      stringify.mock.calls.some((call) => {
+        const value: unknown = call[0];
+        if (typeof value !== "object" || value === null || !("params" in value))
+          return false;
+        const params = value.params;
+        return (
+          typeof params === "object" &&
+          params !== null &&
+          "name" in params &&
+          params.name === name
+        );
+      }),
+    ).toBe(false);
+  } finally {
+    stringify.mockRestore();
+  }
 });
 
 it("sends a Hopper request above 16 MiB when both sides raise the ceiling", async () => {

@@ -26,7 +26,9 @@ export const MINIMUM_BRIDGE_MAX_REQUEST_BYTES = 7464;
  * Largest configurable request. The payload is decoded into one string. 256 MiB
  * keeps that text below Node's single-string ceiling of about 512 Mi UTF-16
  * code units, the same memory bound REA already uses for an ASAR header. A
- * 1 GiB payload cannot be one JavaScript string.
+ * 1 GiB payload cannot be one JavaScript string. Callers measure the escaped
+ * JSON within this ceiling before serialization, so a six-byte `\u00XX`
+ * expansion is refused instead of allocating past the string ceiling.
  */
 export const MAXIMUM_BRIDGE_MAX_REQUEST_BYTES = 256 * 1024 * 1024;
 

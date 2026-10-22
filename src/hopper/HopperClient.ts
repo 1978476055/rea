@@ -33,6 +33,7 @@ import {
 import { err, ok, type Result } from "../domain/result.js";
 import { ProviderCleanupError } from "../domain/providerCleanupError.js";
 import type { JsonValue } from "../domain/jsonValue.js";
+import { jsonValueByteLength } from "../domain/jsonValueByteLength.js";
 import type { ProgressReporter } from "../application/ProgressReporter.js";
 import { silentLogger } from "../logger.js";
 import type { Logger } from "pino";
@@ -1056,7 +1057,23 @@ export class HopperClient {
     }
     if (options.signal?.aborted === true)
       return err(hopperCancelledBySignal(options.signal));
-    const payload = JSON.stringify({ id, token, method, params });
+    const payloadValue = { id, token, method, params };
+    // Count escaped JSON before allocation. A rejected payload must not
+    // throw from JSON.stringify once its expansion passes the ceiling.
+    const measured = jsonValueByteLength(
+      payloadValue,
+      this.#options.bridgeMaxRequestBytes.maximumBytes,
+    );
+    if (measured > this.#options.bridgeMaxRequestBytes.maximumBytes)
+      return err(
+        bridgeRequestOversizeError(
+          method,
+          this.#options.bridgeMaxRequestBytes,
+          measured,
+          "Hopper",
+        ),
+      );
+    const payload = JSON.stringify(payloadValue);
     const payloadBytes = Buffer.byteLength(payload);
     if (payloadBytes > this.#options.bridgeMaxRequestBytes.maximumBytes)
       return err(

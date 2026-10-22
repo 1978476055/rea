@@ -25,6 +25,8 @@ import {
   AnalysisResourceConstraintError,
 } from "../domain/analysisErrorCore.js";
 import { AnalysisError } from "../domain/analysisErrorBase.js";
+import { jsonValueByteLength } from "../domain/jsonValueByteLength.js";
+import type { JsonValue } from "../domain/jsonValue.js";
 import { err, ok, type Result } from "../domain/result.js";
 import { requireWindowsNativeAuthority } from "../windows/WindowsNativeLoader.js";
 import { readBoundedFileBytes } from "../process/BoundedFileBytes.js";
@@ -107,10 +109,21 @@ const serializeRequest = (
   descriptor: z.infer<typeof descriptorSchema>,
   request: Readonly<Record<string, unknown>>,
 ): AuthenticatedRequestBytes => {
-  const requestBytes = JSON.stringify({
+  const requestValue = {
     ...request,
     session_id: descriptor.session_id,
-  });
+  } as JsonValue;
+  // Worst-case JSON expansion (\u00XX) can exceed Node's string ceiling
+  // before an after-the-fact byte check. Measure within the budget first.
+  const measured = jsonValueByteLength(requestValue, limit.maximumBytes);
+  if (measured > limit.maximumBytes)
+    throw bridgeRequestOversizeError(
+      "cutter_command",
+      limit,
+      measured,
+      "Cutter",
+    );
+  const requestBytes = JSON.stringify(requestValue);
   let frameBytes =
     Buffer.byteLength(JSON.stringify({ request: "", proof: "0".repeat(64) })) +
     Buffer.byteLength(requestBytes);

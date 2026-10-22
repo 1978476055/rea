@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 
 import { CutterBridgeClient } from "../../../src/cutter/CutterBridgeClient.js";
 import { ConfigurationError } from "../../../src/domain/configurationErrors.js";
@@ -153,6 +153,61 @@ const outputForEnvelope = (target: number): string => {
     throw new Error(`expected an exact ${String(target)}-byte response frame`);
   return "A".repeat(count);
 };
+
+it("refuses an escaped Cutter command before serializing it", async () => {
+  const directory = await privateDirectory();
+  let connections = 0;
+  const server = authenticatedServer(TOKEN, SESSION, (_request, respond) => {
+    respond({
+      ok: true,
+      output: null,
+      execution_state: "complete",
+      document_generation: 0,
+      identity_status: "partial",
+    });
+  });
+  server.on("connection", () => {
+    connections += 1;
+  });
+  const port = await listen(server);
+  await writeDescriptor(directory, SESSION, port, TOKEN, {
+    maxRequestBytes: 8192,
+  });
+  const client = clientFor(directory, "8192");
+  const command = "\u0001".repeat(2000);
+  const stringify = vi.spyOn(JSON, "stringify");
+  try {
+    await expect(
+      client.execute({
+        sessionId: SESSION,
+        expectedGeneration: 0,
+        command,
+        json: false,
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(AnalysisResourceConstraintError);
+      if (!(error instanceof AnalysisResourceConstraintError)) return false;
+      expect(error.reason).toContain("authenticated frame limit of 8192 bytes");
+      expect(error.reason).toContain("no command was sent");
+      expect(error.reason).toContain("REA_BRIDGE_MAX_REQUEST_BYTES");
+      return true;
+    });
+    expect(connections).toBe(0);
+    expect(
+      stringify.mock.calls.some((call) => {
+        const value: unknown = call[0];
+        return (
+          typeof value === "object" &&
+          value !== null &&
+          "command" in value &&
+          value.command === command
+        );
+      }),
+    ).toBe(false);
+  } finally {
+    stringify.mockRestore();
+  }
+});
 
 it("accepts a Cutter response at the ceiling and excludes the terminating LF", async () => {
   const directory = await privateDirectory();
